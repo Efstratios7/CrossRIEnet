@@ -67,6 +67,7 @@ The codebase relies on the following core libraries:
 
 *   `tensorflow>=2.10.0`
 *   `keras`
+*   `numpy>=2.4.0`
 
 Install them via:
 ```bash
