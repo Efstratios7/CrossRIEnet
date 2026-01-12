@@ -1,17 +1,29 @@
 import tensorflow as tf
 from keras import layers
 from keras import backend as K
+from typing import Optional, List, Tuple, Union, Any
 
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
 
 @tf.function(reduce_retracing=True)
-def _symmetrize(M):
+def _symmetrize(M: tf.Tensor) -> tf.Tensor:
+    """
+    Symmetrizes a matrix M: 0.5 * (M + M^T).
+    
+    Args:
+        M: Input tensor [..., N, N].
+        
+    Returns:
+        Symmetrized tensor [..., N, N].
+    """
     return 0.5 * (M + tf.linalg.matrix_transpose(M))
 
 @tf.function(reduce_retracing=True)
-def svd_via_eigh_full(C, eps=None, jitter_eigh=0.0):
+def svd_via_eigh_full(C: tf.Tensor, 
+                      eps: Optional[float] = None, 
+                      jitter_eigh: float = 0.0) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
    """
    Batched SVD via eigh(CC^T) con V_full costruita in modo coerente con U_k e s_k.
    C: [B, n, m]
@@ -81,17 +93,32 @@ def svd_via_eigh_full(C, eps=None, jitter_eigh=0.0):
    return s_k, U_full, V_full
 
 @tf.function(reduce_retracing=True)
-def diag_vtCv(C, V):
+def diag_vtCv(C: tf.Tensor, V: tf.Tensor) -> tf.Tensor:
     """
-    C: [B, n, n]
-    V: [B, n, r]  (colonne = vettori v_j)
-    return: [B, r] con diag(V^T C V) per batch
+    Computes diagonal elements of V^T C V.
+    
+    Args:
+        C: Covariance/Correlation matrix [B, n, n].
+        V: Matrix of vectors (e.g., eigenvectors) [B, n, r].
+        
+    Returns:
+        Diagonal elements [B, r].
     """
     CV = tf.matmul(C, V)           # [B, n, r]
     d  = tf.reduce_sum(V * CV, axis=1)  # somma su dimensione n -> [B, r]
     return d
 
-def pad_A_to_B_simple(A, B):
+def pad_A_to_B_simple(A: tf.Tensor, B: tf.Tensor) -> tf.Tensor:
+    """
+    Pads tensor A to match dimensions of B (or max dimension of B).
+    
+    Args:
+        A: Input tensor to pad.
+        B: Reference tensor for dimensions.
+        
+    Returns:
+        Padded tensor.
+    """
     n_a = tf.shape(A)[1]
     n_b = tf.maximum(tf.shape(B)[1], tf.shape(B)[2])
     
@@ -100,7 +127,9 @@ def pad_A_to_B_simple(A, B):
     return tf.pad(A, paddings, mode="CONSTANT", constant_values=0)
 
 @tf.function(reduce_retracing=True)
-def svd_reconstruct_from_full(s_k, U_full, V_full):
+def svd_reconstruct_from_full(s_k: tf.Tensor, 
+                              U_full: tf.Tensor, 
+                              V_full: tf.Tensor) -> tf.Tensor:
     """
     Ricostruisce C_hat = U_k @ diag(s_k) @ (V_full[:,:,:r])^T
     """
@@ -116,7 +145,13 @@ def svd_reconstruct_from_full(s_k, U_full, V_full):
 
 @tf.keras.utils.register_keras_serializable(package='Custom_Layers', name='ZScoreLayer')
 class ZScoreLayer(layers.Layer):
-    def __init__(self, epsilon=1e-6, name=None, **kwargs):
+    """
+    Layer that performs Z-Score normalization on the last axis.
+    """
+    def __init__(self, 
+                 epsilon: float = 1e-6, 
+                 name: Optional[str] = None, 
+                 **kwargs):
         if name is None:
             raise ValueError("ZScoreLayer must have a name.")
         super(ZScoreLayer, self).__init__(name=name, **kwargs)
@@ -140,7 +175,13 @@ class ZScoreLayer(layers.Layer):
 
 @tf.keras.utils.register_keras_serializable(package='Custom_Layers', name='SeriesLengthLayer')
 class SeriesLengthLayer(layers.Layer):
-    def __init__(self, dtype=tf.float32, name=None, **kwargs):
+    """
+    Layer that computes the length of the time series (last dimension).
+    """
+    def __init__(self, 
+                 dtype: tf.DType = tf.float32, 
+                 name: Optional[str] = None, 
+                 **kwargs):
         if name is None:
             raise ValueError("SeriesLengthLayer must have a name.")
         super(SeriesLengthLayer, self).__init__(name=name, **kwargs)
@@ -163,7 +204,13 @@ class SeriesLengthLayer(layers.Layer):
 
 @tf.keras.utils.register_keras_serializable(package='Custom_Layers', name='SafeSampleCountLayer')
 class SafeSampleCountLayer(layers.Layer):
-    def __init__(self, minimum=1.0, name=None, **kwargs):
+    """
+    Layer that ensures a minimum sample count value.
+    """
+    def __init__(self, 
+                 minimum: float = 1.0, 
+                 name: Optional[str] = None, 
+                 **kwargs):
         if name is None:
             raise ValueError("SafeSampleCountLayer must have a name.")
         super(SafeSampleCountLayer, self).__init__(name=name, **kwargs)
@@ -184,7 +231,14 @@ class SafeSampleCountLayer(layers.Layer):
 
 @tf.keras.utils.register_keras_serializable(package='Custom_Layers', name='CovarianceLayer')
 class CovarianceLayer(layers.Layer):
-    def __init__(self, expand_dims=False, normalize=True, name=None, **kwargs):
+    """
+    Layer that computes the Covariance matrix X * X^T (optionally normalized).
+    """
+    def __init__(self, 
+                 expand_dims: bool = False, 
+                 normalize: bool = True, 
+                 name: Optional[str] = None, 
+                 **kwargs):
         if name is None:
             raise ValueError("CovarianceLayer must have a name.")
         super(CovarianceLayer, self).__init__(name=name, **kwargs)
@@ -216,7 +270,12 @@ class CovarianceLayer(layers.Layer):
 
 @tf.keras.utils.register_keras_serializable(package='Custom_Layers', name='CrossCovarianceLayer')
 class CrossCovarianceLayer(layers.Layer):
-    def __init__(self, name=None, **kwargs):
+    """
+    Layer that computes Cross-Covariance matrix (X * Y^T) / denom.
+    """
+    def __init__(self, 
+                 name: Optional[str] = None, 
+                 **kwargs):
         if name is None:
             raise ValueError("CrossCovarianceLayer must have a name.")
         super(CrossCovarianceLayer, self).__init__(name=name, **kwargs)
@@ -236,7 +295,12 @@ class CrossCovarianceLayer(layers.Layer):
 
 @tf.keras.utils.register_keras_serializable(package='Custom_Layers', name='ExpandDimsLayer')
 class ExpandDimsLayer(layers.Layer):
-    def __init__(self, axis=-1, **kwargs):
+    """
+    Layer to expand dimensions of input tensor.
+    """
+    def __init__(self, 
+                 axis: int = -1, 
+                 **kwargs):
         super(ExpandDimsLayer, self).__init__(**kwargs)
         self.axis = axis
 
@@ -261,7 +325,13 @@ class ExpandDimsLayer(layers.Layer):
 
 @tf.keras.utils.register_keras_serializable(package='CCC_Functions', name='SVDViaEighFullLayer')
 class SVDViaEighFullLayer(tf.keras.layers.Layer):
-    def __init__(self, eps=None, name=None, **kwargs):
+    """
+    Layer wrapper for SVD via Eigh.
+    """
+    def __init__(self, 
+                 eps: Optional[float] = None, 
+                 name: Optional[str] = None, 
+                 **kwargs):
         super().__init__(name=name, **kwargs)
         self.eps = eps
     
@@ -275,7 +345,12 @@ class SVDViaEighFullLayer(tf.keras.layers.Layer):
 
 @tf.keras.utils.register_keras_serializable(package='CCC_Functions', name='DiagVtCvLayer')
 class DiagVtCvLayer(tf.keras.layers.Layer):
-    def __init__(self, name=None, **kwargs):
+    """
+    Layer wrapper for computing diagonal of V^T C V.
+    """
+    def __init__(self, 
+                 name: Optional[str] = None, 
+                 **kwargs):
         super().__init__(name=name, **kwargs)
     
     def call(self, inputs):
@@ -287,7 +362,13 @@ class DiagVtCvLayer(tf.keras.layers.Layer):
 
 @tf.keras.utils.register_keras_serializable(package='CCC_Functions', name='DimAware2DLayer')
 class DimAware2DLayer(tf.keras.layers.Layer):
-    def __init__(self, features=['n1', 'n2', 'q1', 'q2'], name=None, **kwargs):
+    """
+    Adds dimension-aware features (like N/T, M/T) to the input tensor.
+    """
+    def __init__(self, 
+                 features: List[str] = ['n1', 'n2', 'q1', 'q2'], 
+                 name: Optional[str] = None, 
+                 **kwargs):
         super().__init__(name=name, **kwargs)
         valid_keys = {'n1', 'n2', 'q1', 'q2', 't', 't1', 't2'} 
         for f in features:
@@ -367,7 +448,12 @@ class DimAware2DLayer(tf.keras.layers.Layer):
 
 @tf.keras.utils.register_keras_serializable(package='CCC_Functions', name='PadA2BSimpleLayer')
 class PadA2BSimpleLayer(tf.keras.layers.Layer):
-    def __init__(self, name=None, **kwargs):
+    """
+    Layer to pad input A to match shape of B.
+    """
+    def __init__(self, 
+                 name: Optional[str] = None, 
+                 **kwargs):
         super().__init__(name=name, **kwargs)
     
     def call(self, inputs):
@@ -379,9 +465,19 @@ class PadA2BSimpleLayer(tf.keras.layers.Layer):
 
 @tf.keras.utils.register_keras_serializable(package='Custom_Layers', name='DeepLayer')
 class DeepLayer(layers.Layer):
-    def __init__(self, hidden_layer_sizes, last_activation="linear",
-                 activation="leaky_relu", other_biases=True, last_bias=True,
-                 dropout_rate=0., kernel_initializer="glorot_uniform", name=None, **kwargs):
+    """
+    A deep fully connected network with dropouts and optional biases.
+    """
+    def __init__(self, 
+                 hidden_layer_sizes: List[int], 
+                 last_activation: str = "linear",
+                 activation: str = "leaky_relu", 
+                 other_biases: bool = True, 
+                 last_bias: bool = True,
+                 dropout_rate: float = 0., 
+                 kernel_initializer: str = "glorot_uniform", 
+                 name: Optional[str] = None, 
+                 **kwargs):
         if name is None:
             raise ValueError("DeepLayer must have a name.")
         super(DeepLayer, self).__init__(name=name, **kwargs)
@@ -453,7 +549,14 @@ class DeepLayer(layers.Layer):
 
 @tf.keras.utils.register_keras_serializable(package='Custom_Layers', name='CustomNormalizationLayer')
 class CustomNormalizationLayer(layers.Layer):
-    def __init__(self, mode='sum', axis=-2, name=None, **kwargs):
+    """
+    Performs Sum or Inverse normalization along an axis.
+    """
+    def __init__(self, 
+                 mode: str = 'sum', 
+                 axis: int = -2, 
+                 name: Optional[str] = None, 
+                 **kwargs):
         if name is None:
             raise ValueError("CustomNormalizationLayer must have a name.")
         super(CustomNormalizationLayer, self).__init__(name=name, **kwargs)
@@ -484,8 +587,22 @@ class CustomNormalizationLayer(layers.Layer):
 
 @tf.keras.utils.register_keras_serializable(package='Custom_Layers', name='DeepRecurrentLayer')
 class DeepRecurrentLayer(layers.Layer):
-    def __init__(self, recurrent_layer_sizes,final_activation="softplus", final_hidden_layer_sizes=[], final_hidden_activation="leaky_relu",
-                 direction='bidirectional', dropout=0.,recurrent_dropout=0.,recurrent_model='LSTM', normalize=None, bottleneck=1, name=None, **kwargs):
+    """
+    A deep recurrent network followed by a deep fully connected network.
+    """
+    def __init__(self, 
+                 recurrent_layer_sizes: List[int],
+                 final_activation: str = "softplus", 
+                 final_hidden_layer_sizes: List[int] = [], 
+                 final_hidden_activation: str = "leaky_relu",
+                 direction: str = 'bidirectional', 
+                 dropout: float = 0.,
+                 recurrent_dropout: float = 0.,
+                 recurrent_model: str = 'LSTM', 
+                 normalize: Optional[str] = None, 
+                 bottleneck: int = 1, 
+                 name: Optional[str] = None, 
+                 **kwargs):
         if name is None:
             raise ValueError("DeepRecurrentLayer must have a name.")
         super(DeepRecurrentLayer, self).__init__(name=name, **kwargs)
@@ -569,8 +686,12 @@ class DeepRecurrentLayer(layers.Layer):
 
 @tf.keras.utils.register_keras_serializable(package='Custom_Layers', name='TakeTop')
 class TakeTop(layers.Layer):
+    """
+    Layer that slices the first M columns of the input matrix.
+    """
     def __init__(self, **kwargs):
         super(TakeTop, self).__init__(**kwargs)
+
     
     def call(self, inputs):
         Mat, target_Mat = inputs
@@ -587,7 +708,12 @@ class TakeTop(layers.Layer):
 
 @tf.keras.utils.register_keras_serializable(package='CCC_Functions', name='SVDReconstructFromFullLayer')
 class SVDReconstructFromFullLayer(tf.keras.layers.Layer):
-    def __init__(self, name=None, **kwargs):
+    """
+    Reconstructs matrix from SVD components.
+    """
+    def __init__(self, 
+                 name: Optional[str] = None, 
+                 **kwargs):
         super().__init__(name=name, **kwargs)
     
     def call(self, inputs):

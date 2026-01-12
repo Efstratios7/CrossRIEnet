@@ -1,1 +1,3 @@
 my_test.ipynb
+ccc.egg-info/*
+ccc/__pycache__/*

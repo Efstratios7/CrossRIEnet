@@ -1,11 +1,22 @@
 import tensorflow as tf
 from keras import layers, Model
 from . import custom_layers as cl
+from typing import Optional, List, Any
 
 @tf.keras.utils.register_keras_serializable(package='CCC_Models', name='GeneralizedCCCModel')
 class GeneralizedCCCModel(Model):
-    def __init__(self, encoding_units, lstm_units, final_hidden_layer_sizes,
-                 multiplicative, final_activation, outputs=['Cxy'], **kwargs):
+    """
+    Generalized Cross-Correlation Correction (CCC) Model.
+    Uses deep learning to denoise cross-correlation matrices.
+    """
+    def __init__(self, 
+                 encoding_units: List[int], 
+                 lstm_units: List[int], 
+                 final_hidden_layer_sizes: List[int],
+                 multiplicative: bool, 
+                 final_activation: str, 
+                 outputs: List[str] = ['Cxy'], 
+                 **kwargs):
         super(GeneralizedCCCModel, self).__init__(**kwargs)
         
         if multiplicative and final_activation not in ['softplus', 'relu', 'sigmoid']:
@@ -46,7 +57,7 @@ class GeneralizedCCCModel(Model):
         self.take_top = cl.TakeTop()
         self.svd_recon = cl.SVDReconstructFromFullLayer(name='SVD_Reconstruct')
 
-    def call(self, inputs):
+    def call(self, inputs: List[Any]) -> Any:
         # inputs: [Cxx, Cyy, Cxy, n_samples]
         Cxx, Cyy, Cxy, n_samples = inputs
         
