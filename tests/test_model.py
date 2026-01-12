@@ -4,6 +4,7 @@ import os
 import tensorflow as tf
 from keras import losses, optimizers
 import numpy as np
+import random
 
 from ccc import GeneralizedCCCModel
 
@@ -199,6 +200,54 @@ class TestGeneralizedCCCModel(unittest.TestCase):
         # 6. Check forward pass after training
         pred = model.predict([Cxx, Cyy, Cxy_noisy, n_samples])
         self.assertEqual(pred.shape, (B, N, M))
+
+
+    def test_training_variable_dimensions(self):
+        """Simulate training with random variable dimensions (Days [200,600], Stocks [100,250])"""
+        # Random dimensions
+        ndays = random.randint(200, 600)
+        nstocks_N = random.randint(100, 250)
+        nstocks_M = random.randint(100, 250)
+        
+        # print(f"\nRunning variable dimension test with: T={ndays}, N={nstocks_N}, M={nstocks_M}")
+        
+        # 1. Setup Data
+        B = 2
+        Cxx = tf.random.normal((B, nstocks_N, nstocks_N))
+        Cyy = tf.random.normal((B, nstocks_M, nstocks_M))
+        Cxy_noisy = tf.random.normal((B, nstocks_N, nstocks_M))
+        n_samples = tf.constant([float(ndays)] * B)
+        
+        # Target
+        Cxy_clean = tf.random.normal((B, nstocks_N, nstocks_M))
+        
+        # 2. Initialize Model
+        model = GeneralizedCCCModel(
+            encoding_units=[32],
+            lstm_units=[16],
+            final_hidden_layer_sizes=[16],
+            multiplicative=True,
+            final_activation='softplus'
+        )
+        
+        # 3. Compile
+        model.compile(optimizer='adam', loss='mse')
+        
+        # 4. Train
+        history = model.fit(
+            x=[Cxx, Cyy, Cxy_noisy, n_samples],
+            y=Cxy_clean,
+            epochs=1,
+            batch_size=B,
+            verbose=0
+        )
+        
+        loss = history.history['loss'][0]
+        self.assertGreater(loss, 0.0)
+        
+        # 5. Predict
+        pred = model.predict([Cxx, Cyy, Cxy_noisy, n_samples])
+        self.assertEqual(pred.shape, (B, nstocks_N, nstocks_M))
 
 if __name__ == '__main__':
     unittest.main()

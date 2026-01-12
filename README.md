@@ -27,6 +27,10 @@ This repository hosts the **Generalized Cross-Correlation Correction (CCC) Model
 git clone [Insert Repository Link Here]
 cd Cross-Covariance-Cleaning
 
+# Create and activate the environment
+conda env create -f environment.yml
+conda activate ccc_env
+
 # Install in editable mode
 pip install -e .
 ```
@@ -75,6 +79,8 @@ print("Denoised shape:", denoised_Cxy.shape)
 To run the comprehensive tests, including a training simulation:
 
 ```bash
+# Ensure environment is active
+conda activate ccc_env
 python -m unittest tests/test_model.py
 ```
 
