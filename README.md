@@ -8,7 +8,7 @@ This repository hosts the **Generalized Cross-Correlation Correction (CCC) Model
 
 *   **Deep Non-Linear Shrinkage**: Utilizes Deep Neural Networks (DNN) and Recurrent Neural Networks (LSTM/GRU) to learn optimal non-linear shrinkage functions for singular values.
 *   **Generalized Noise Modeling**: Supports both **Multiplicative** and **Additive** noise assumptions, allowing flexibility based on the underlying data characteristics.
-*   **SVD-Based Architecture**: Implements an end-to-end differentiable Singular Value Decomposition (SVD) within the model (via `SVDViaEighFullLayer`), enabling direct optimization of spectral properties.
+*   **SVD-Based Architecture**: Implements an end-to-end differentiable Singular Value Decomposition (SVD) within the model (via `SpectralSVDLayer`), enabling direct optimization of spectral properties.
 *   **Dimension Awareness**: Incorporates "Dimension Aware" layers that account for the ratio of features to samples ($N/T$ and $M/T$), making the model robust to varying system sizes.
 *   **Flexible Configuration**: Customizable architecture including encoding sizes, recurrent unit types/sizes, and activation functions (e.g., Softplus for non-negative multiplicative shrinkage).
 

@@ -21,16 +21,21 @@ def _symmetrize(M: tf.Tensor) -> tf.Tensor:
     return 0.5 * (M + tf.linalg.matrix_transpose(M))
 
 @tf.function(reduce_retracing=True)
-def svd_via_eigh_full(C: tf.Tensor, 
-                      eps: Optional[float] = None, 
-                      jitter_eigh: float = 0.0) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+def spectral_svd_decomposition(C: tf.Tensor, 
+                               eps: Optional[float] = None, 
+                               jitter_eigh: float = 0.0) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
    """
-   Batched SVD via eigh(CC^T) con V_full costruita in modo coerente con U_k e s_k.
-   C: [B, n, m]
-   Ritorna:
-     s_k    [B, r]        (r = min(n,m), singolari in ordine decrescente)
-     U_k    [B, n, r]
-     V_full [B, m, m]     (prime r colonne = right singular vectors coerenti)
+   Computes a batched SVD decomposition using `tf.linalg.eigh` on the covariance matrix C * C^T.
+   
+   Args:
+       C: Input tensor of shape [B, N, M].
+       eps: Epsilon for numerical stability. If None, uses backend epsilon.
+       jitter_eigh: Small jitter added to the diagonal for stability during eigendecomposition.
+       
+   Returns:
+       s_k: Singular values of shape [B, r], where r = min(N, M). Sorted in descending order.
+       U_full: Left singular vectors of shape [B, N, N].
+       V_full: Right singular vectors of shape [B, M, M], where the first r columns are consistent with s_k and U_full.
    """
    C = tf.convert_to_tensor(C)
    if eps is None:
@@ -42,22 +47,22 @@ def svd_via_eigh_full(C: tf.Tensor,
    r = tf.minimum(n, m)
    m_minus_r = m - r
 
-   # 1) U_k e s_k da eigh(CC^T), simmetrizzato
+   # 1) Compute U_k and s_k from eigh(C * C^T)
    A = tf.matmul(C, C, transpose_b=True)            # [B, n, n]
    A = _symmetrize(A)
 
    if jitter_eigh != 0.0:
        I_n = tf.eye(n, batch_shape=[B], dtype=C.dtype)
-       A = A + tf.cast(jitter_eigh, C.dtype) * I_n  # piccolo jitter sulla diagonale
+       A = A + tf.cast(jitter_eigh, C.dtype) * I_n  
 
-   evals_u, U_full = tf.linalg.eigh(A)              # autovalori in ordine crescente
+   evals_u, U_full = tf.linalg.eigh(A)              
 
-   # Ordina in ordine decrescente
+   # Sort in descending order
    idx_u = tf.argsort(evals_u, direction="DESCENDING")
    evals_u = tf.gather(evals_u, idx_u, batch_dims=1, axis=1)    # [B, n]
    U_full = tf.gather(U_full, idx_u, batch_dims=1, axis=2)      # [B, n, n]
 
-   # Singolari = sqrt(max(evals, 0))
+   # Singular values = sqrt(max(evals, 0))
    zeros_evals = tf.zeros_like(evals_u)
    s_all = tf.sqrt(tf.maximum(evals_u, zeros_evals))            # [B, n]
 
@@ -65,11 +70,11 @@ def svd_via_eigh_full(C: tf.Tensor,
    s_k = s_all[:, :r]                                           # [B, r]
    s_safe = tf.maximum(s_k, eps)
 
-   # 2) prime r colonne di V: V1 = C^T U_k / s_k
+   # 2) Compute first r columns of V: V1 = C^T U_k / s_k
    V1 = tf.matmul(C, U_k, transpose_a=True)                     # [B, m, r]
    V1 = V1 / tf.expand_dims(s_safe, axis=1)                     # [B, m, r]
 
-   # 3) normalizza colonne di V1 e compensa in s_k
+   # 3) Normalize V1 columns and compensate in s_k
    norms = tf.maximum(tf.linalg.norm(V1, axis=1), eps)          # [B, r]
    V1 = V1 / tf.expand_dims(norms, axis=1)                      # [B, m, r]
    s_k = s_k * norms                                            # [B, r]
@@ -77,14 +82,11 @@ def svd_via_eigh_full(C: tf.Tensor,
    I_m = tf.eye(m, batch_shape=[B], dtype=C.dtype)              # [B, m, m]
    W0 = I_m[:, :, r:]                                           # [B, m, m-r]
 
-   # Proietta W0 sul complemento di span(V1):
-   # V1^T W0: [B, r, m-r]
+   # Project W0 onto the complement of span(V1)
    V1tW0 = tf.matmul(V1, W0, transpose_a=True)
-   # W1 = W0 - V1 (V1^T W0): [B, m, m-r]
    W1 = W0 - tf.matmul(V1, V1tW0)
 
-   # QR di W1: le colonne di Q sono ortonormali e (idealmente) nel complemento di span(V1)
-   # Funziona anche quando m_minus_r == 0 (dimensione nulla).
+   # QR decomposition of W1
    V2, _ = tf.linalg.qr(W1, full_matrices=False)                # [B, m, m-r]
 
    # V_full = [V1 | V2]
@@ -93,22 +95,22 @@ def svd_via_eigh_full(C: tf.Tensor,
    return s_k, U_full, V_full
 
 @tf.function(reduce_retracing=True)
-def diag_vtCv(C: tf.Tensor, V: tf.Tensor) -> tf.Tensor:
+def compute_projected_variance_diagonal(C: tf.Tensor, V: tf.Tensor) -> tf.Tensor:
     """
-    Computes diagonal elements of V^T C V.
+    Computes diagonal elements of the projected covariance term V^T C V.
     
     Args:
-        C: Covariance/Correlation matrix [B, n, n].
-        V: Matrix of vectors (e.g., eigenvectors) [B, n, r].
+        C: Covariance/Correlation matrix [B, N, N].
+        V: Projection matrix (e.g., eigenvectors) [B, N, r].
         
     Returns:
         Diagonal elements [B, r].
     """
     CV = tf.matmul(C, V)           # [B, n, r]
-    d  = tf.reduce_sum(V * CV, axis=1)  # somma su dimensione n -> [B, r]
+    d  = tf.reduce_sum(V * CV, axis=1)  # sum over dimension n -> [B, r]
     return d
 
-def pad_A_to_B_simple(A: tf.Tensor, B: tf.Tensor) -> tf.Tensor:
+def match_dimensions_by_padding(A: tf.Tensor, B: tf.Tensor) -> tf.Tensor:
     """
     Pads tensor A to match dimensions of B (or max dimension of B).
     
@@ -127,11 +129,19 @@ def pad_A_to_B_simple(A: tf.Tensor, B: tf.Tensor) -> tf.Tensor:
     return tf.pad(A, paddings, mode="CONSTANT", constant_values=0)
 
 @tf.function(reduce_retracing=True)
-def svd_reconstruct_from_full(s_k: tf.Tensor, 
-                              U_full: tf.Tensor, 
-                              V_full: tf.Tensor) -> tf.Tensor:
+def reconstruct_matrix_from_svd(s_k: tf.Tensor, 
+                                U_full: tf.Tensor, 
+                                V_full: tf.Tensor) -> tf.Tensor:
     """
-    Ricostruisce C_hat = U_k @ diag(s_k) @ (V_full[:,:,:r])^T
+    Reconstructs the rectangular matrix from full component set.
+
+    Args:
+        s_k: Singular values [B, r].
+        U_full: Left singular vectors [B, N, N].
+        V_full: Right singular vectors [B, M, M].
+
+    Returns:
+        Reconstructed matrix [B, N, M].
     """
     r = tf.shape(s_k)[1]
     V_k = V_full[:, :, :r]   
@@ -143,160 +153,27 @@ def svd_reconstruct_from_full(s_k: tf.Tensor,
 # CUSTOM LAYERS
 # ============================================================================
 
-@tf.keras.utils.register_keras_serializable(package='Custom_Layers', name='ZScoreLayer')
-class ZScoreLayer(layers.Layer):
-    """
-    Layer that performs Z-Score normalization on the last axis.
-    """
-    def __init__(self, 
-                 epsilon: float = 1e-6, 
-                 name: Optional[str] = None, 
-                 **kwargs):
-        if name is None:
-            raise ValueError("ZScoreLayer must have a name.")
-        super(ZScoreLayer, self).__init__(name=name, **kwargs)
-        self.epsilon = float(epsilon)
 
-    def call(self, inputs):
-        mean = tf.reduce_mean(inputs, axis=-1, keepdims=True)
-        centered = inputs - mean
-        variance = tf.reduce_mean(tf.square(centered), axis=-1, keepdims=True)
-        std = tf.sqrt(tf.maximum(variance, self.epsilon))
-        return centered / std
 
-    def get_config(self):
-        config = super(ZScoreLayer, self).get_config()
-        config.update({'epsilon': self.epsilon})
-        return config
 
-    @classmethod
-    def from_config(cls, config):
-        return cls(**config)
 
-@tf.keras.utils.register_keras_serializable(package='Custom_Layers', name='SeriesLengthLayer')
-class SeriesLengthLayer(layers.Layer):
-    """
-    Layer that computes the length of the time series (last dimension).
-    """
-    def __init__(self, 
-                 dtype: tf.DType = tf.float32, 
-                 name: Optional[str] = None, 
-                 **kwargs):
-        if name is None:
-            raise ValueError("SeriesLengthLayer must have a name.")
-        super(SeriesLengthLayer, self).__init__(name=name, **kwargs)
-        self.output_dtype = tf.dtypes.as_dtype(dtype)
 
-    def call(self, inputs):
-        batch_size = tf.shape(inputs)[0]
-        steps = tf.cast(tf.shape(inputs)[-1], self.output_dtype)
-        ones = tf.ones((batch_size,), dtype=self.output_dtype)
-        return ones * steps
 
-    def get_config(self):
-        config = super(SeriesLengthLayer, self).get_config()
-        config.update({'dtype': self.output_dtype.name})
-        return config
 
-    @classmethod
-    def from_config(cls, config):
-        return cls(**config)
 
-@tf.keras.utils.register_keras_serializable(package='Custom_Layers', name='SafeSampleCountLayer')
-class SafeSampleCountLayer(layers.Layer):
-    """
-    Layer that ensures a minimum sample count value.
-    """
-    def __init__(self, 
-                 minimum: float = 1.0, 
-                 name: Optional[str] = None, 
-                 **kwargs):
-        if name is None:
-            raise ValueError("SafeSampleCountLayer must have a name.")
-        super(SafeSampleCountLayer, self).__init__(name=name, **kwargs)
-        self.minimum = float(minimum)
 
-    def call(self, inputs):
-        values = tf.cast(inputs, tf.float32)
-        return tf.maximum(values, self.minimum)
-
-    def get_config(self):
-        config = super(SafeSampleCountLayer, self).get_config()
-        config.update({'minimum': self.minimum})
-        return config
-
-    @classmethod
-    def from_config(cls, config):
-        return cls(**config)
-
-@tf.keras.utils.register_keras_serializable(package='Custom_Layers', name='CovarianceLayer')
-class CovarianceLayer(layers.Layer):
-    """
-    Layer that computes the Covariance matrix X * X^T (optionally normalized).
-    """
-    def __init__(self, 
-                 expand_dims: bool = False, 
-                 normalize: bool = True, 
-                 name: Optional[str] = None, 
-                 **kwargs):
-        if name is None:
-            raise ValueError("CovarianceLayer must have a name.")
-        super(CovarianceLayer, self).__init__(name=name, **kwargs)
-        self.expand_dims = expand_dims
-        self.normalize = normalize
-
-    def call(self, Returns):
-        dtype = Returns.dtype
-        if self.normalize:
-            sample_size = tf.cast(tf.shape(Returns)[-1], dtype)
-            Covariance = tf.matmul(Returns, Returns, transpose_b=True) / sample_size
-        else:
-            Covariance = tf.matmul(Returns, Returns, transpose_b=True)
-        if self.expand_dims:
-            Covariance = tf.expand_dims(Covariance, axis=-3)
-        return Covariance
-
-    def get_config(self):
-        config = super(CovarianceLayer, self).get_config()
-        config.update({
-            'expand_dims': self.expand_dims,
-            'normalize': self.normalize
-        })
-        return config
-    
-    @classmethod
-    def from_config(cls, config):
-        return cls(**config)
-
-@tf.keras.utils.register_keras_serializable(package='Custom_Layers', name='CrossCovarianceLayer')
-class CrossCovarianceLayer(layers.Layer):
-    """
-    Layer that computes Cross-Covariance matrix (X * Y^T) / denom.
-    """
-    def __init__(self, 
-                 name: Optional[str] = None, 
-                 **kwargs):
-        if name is None:
-            raise ValueError("CrossCovarianceLayer must have a name.")
-        super(CrossCovarianceLayer, self).__init__(name=name, **kwargs)
-
-    def call(self, inputs):
-        x, y, denom = inputs
-        numer = tf.matmul(x, y, transpose_b=True)
-        denom = tf.cast(denom, numer.dtype)
-        return numer / denom
-
-    def get_config(self):
-        return super(CrossCovarianceLayer, self).get_config()
-
-    @classmethod
-    def from_config(cls, config):
-        return cls(**config)
 
 @tf.keras.utils.register_keras_serializable(package='Custom_Layers', name='ExpandDimsLayer')
 class ExpandDimsLayer(layers.Layer):
     """
     Layer to expand dimensions of input tensor.
+
+    Args:
+        axis: Axis index to expand.
+        **kwargs: Standard Keras Layer arguments.
+
+    Returns:
+        Tensor with expanded dimensions.
     """
     def __init__(self, 
                  axis: int = -1, 
@@ -305,6 +182,15 @@ class ExpandDimsLayer(layers.Layer):
         self.axis = axis
 
     def call(self, inputs):
+        """
+        Expands intended dimension.
+
+        Args:
+            inputs: Input tensor. For Sxy: [Batch, K].
+
+        Returns:
+            Expanded tensor. [Batch, K, 1].
+        """
         return tf.expand_dims(inputs, axis=self.axis)
 
     def get_config(self):
@@ -323,10 +209,20 @@ class ExpandDimsLayer(layers.Layer):
         shape.insert(self.axis if self.axis >= 0 else len(shape) + self.axis + 1, 1)
         return tuple(shape)
 
-@tf.keras.utils.register_keras_serializable(package='CCC_Functions', name='SVDViaEighFullLayer')
-class SVDViaEighFullLayer(tf.keras.layers.Layer):
+@tf.keras.utils.register_keras_serializable(package='CCC_Functions', name='SpectralSVDLayer')
+class SpectralSVDLayer(tf.keras.layers.Layer):
     """
-    Layer wrapper for SVD via Eigh.
+    Layer wrapper for Spectral SVD Decomposition.
+
+    Performs batched SVD on the input tensor C * C^T.
+
+    Args:
+        eps: Epsilon for numerical stability.
+        name: Name of the layer.
+        **kwargs: Standard Keras Layer arguments.
+
+    Returns:
+        Tuple (s_k, U_full, V_full) containing singular values, left and right singular vectors.
     """
     def __init__(self, 
                  eps: Optional[float] = None, 
@@ -336,17 +232,36 @@ class SVDViaEighFullLayer(tf.keras.layers.Layer):
         self.eps = eps
     
     def call(self, C):
-        return svd_via_eigh_full(C, eps=self.eps)
+        """
+        Performs SVD.
+
+        Args:
+            C: Input matrix [Batch, N, M].
+
+        Returns:
+            Tuple (s_k, U_full, V_full):
+            - s_k: Singular values [Batch, K], where K=min(N, M).
+            - U_full: Left singular vectors [Batch, N, N].
+            - V_full: Right singular vectors [Batch, M, M].
+        """
+        return spectral_svd_decomposition(C, eps=self.eps)
     
     def get_config(self):
         config = super().get_config()
         config.update({'eps': self.eps})
         return config
 
-@tf.keras.utils.register_keras_serializable(package='CCC_Functions', name='DiagVtCvLayer')
-class DiagVtCvLayer(tf.keras.layers.Layer):
+@tf.keras.utils.register_keras_serializable(package='CCC_Functions', name='ProjectedVarianceDiagonalLayer')
+class ProjectedVarianceDiagonalLayer(tf.keras.layers.Layer):
     """
     Layer wrapper for computing diagonal of V^T C V.
+
+    Args:
+        name: Name of the layer.
+        **kwargs: Standard Keras Layer arguments.
+
+    Returns:
+        Diagonal elements of the projected variance.
     """
     def __init__(self, 
                  name: Optional[str] = None, 
@@ -354,16 +269,37 @@ class DiagVtCvLayer(tf.keras.layers.Layer):
         super().__init__(name=name, **kwargs)
     
     def call(self, inputs):
+        """
+        Computes projected variance diagonal.
+
+        Args:
+            inputs: Tuple (C, V).
+            C: Block matrix [Batch, N, N] (for Cxx) or [Batch, M, M] (for Cyy).
+            V: Corresponding singular vector matrix [Batch, N, N] (Lxy) or [Batch, M, M] (Rxy).
+
+        Returns:
+            Diagonal elements. [Batch, N] (for Cxx) or [Batch, M] (for Cyy).
+        """
         C, V = inputs
-        return diag_vtCv(C, V)
+        return compute_projected_variance_diagonal(C, V)
     
     def get_config(self):
         return super().get_config()
 
-@tf.keras.utils.register_keras_serializable(package='CCC_Functions', name='DimAware2DLayer')
-class DimAware2DLayer(tf.keras.layers.Layer):
+@tf.keras.utils.register_keras_serializable(package='CCC_Functions', name='DimensionAwarenessLayer')
+class DimensionAwarenessLayer(tf.keras.layers.Layer):
     """
     Adds dimension-aware features (like N/T, M/T) to the input tensor.
+
+    Concatenates additional features representing system dimensions and ratios to the input.
+
+    Args:
+        features: List of feature names to add ('n1', 'n2', 'q1', 'q2', 't', 't1', 't2').
+        name: Name of the layer.
+        **kwargs: Standard Keras Layer arguments.
+
+    Returns:
+        Tensor with concatenated dimension features.
     """
     def __init__(self, 
                  features: List[str] = ['n1', 'n2', 'q1', 'q2'], 
@@ -373,12 +309,12 @@ class DimAware2DLayer(tf.keras.layers.Layer):
         valid_keys = {'n1', 'n2', 'q1', 'q2', 't', 't1', 't2'} 
         for f in features:
             if f not in valid_keys:
-                raise ValueError(f"Feature '{f}' non supportata. Usa: {valid_keys}")
+                raise ValueError(f"Feature '{f}' not supported. Use: {valid_keys}")
         self.features = features
 
     def compute_output_shape(self, input_shape):
         if len(input_shape) < 2:
-             raise ValueError("DimAware2DLayer richiede [Mat, Shape_mat, t]")
+             raise ValueError("DimensionAwarenessLayer requires [Mat, Shape_mat, t]")
 
         mat_shape = input_shape[0]       
         
@@ -393,9 +329,21 @@ class DimAware2DLayer(tf.keras.layers.Layer):
             return (mat_shape[0], n_dim, channels + len(self.features))
         
         else:
-            raise ValueError(f"Shape di Mat inattesa: {mat_shape}. Atteso (Batch, N) o (Batch, N, C)")
+            raise ValueError(f"Unexpected Mat shape: {mat_shape}. Expected (Batch, N) or (Batch, N, C)")
 
     def call(self, inputs):
+        """
+        Adds dimension features.
+
+        Args:
+            inputs: Tuple (Mat, Shape_mat, t).
+            Mat: Input matrix (Pxx/Pyy) [Batch, N, 1] (or [Batch, M, 1]).
+            Shape_mat: Input shape matrix (Cxy) [Batch, N, M].
+            t: Input time vector (n_samples) [Batch].
+
+        Returns:
+            Tensor with added features. [Batch, N, 2] (or [Batch, M, 2]).
+        """
         Mat, Shape_mat, t = inputs
         
         if len(Mat.shape) == 2:
@@ -446,10 +394,19 @@ class DimAware2DLayer(tf.keras.layers.Layer):
         config.update({'features': self.features})
         return config
 
-@tf.keras.utils.register_keras_serializable(package='CCC_Functions', name='PadA2BSimpleLayer')
-class PadA2BSimpleLayer(tf.keras.layers.Layer):
+@tf.keras.utils.register_keras_serializable(package='CCC_Functions', name='DimensionMatchingLayer')
+class DimensionMatchingLayer(tf.keras.layers.Layer):
     """
     Layer to pad input A to match shape of B.
+
+    Computes necessary padding based on dimensions of B and applies it to A.
+
+    Args:
+        name: Name of the layer.
+        **kwargs: Standard Keras Layer arguments.
+
+    Returns:
+        Padded tensor A matching dimensions of B.
     """
     def __init__(self, 
                  name: Optional[str] = None, 
@@ -457,8 +414,19 @@ class PadA2BSimpleLayer(tf.keras.layers.Layer):
         super().__init__(name=name, **kwargs)
     
     def call(self, inputs):
+        """
+        Pads tensor A.
+
+        Args:
+            inputs: Tuple (A, B).
+            A: Input tensor to pad [Batch, N, F] (or [Batch, M, F]).
+            B: Reference tensor (Cxy) [Batch, N, M].
+
+        Returns:
+            Padded A. [Batch, Max(N,M), F].
+        """
         A, B = inputs
-        return pad_A_to_B_simple(A, B)
+        return match_dimensions_by_padding(A, B)
     
     def get_config(self):
         return super().get_config()
@@ -467,6 +435,20 @@ class PadA2BSimpleLayer(tf.keras.layers.Layer):
 class DeepLayer(layers.Layer):
     """
     A deep fully connected network with dropouts and optional biases.
+
+    Args:
+        hidden_layer_sizes: List of integers specifying the size of each hidden layer.
+        last_activation: Activation function for the output layer.
+        activation: Activation function for hidden layers.
+        other_biases: Whether to use bias in hidden layers.
+        last_bias: Whether to use bias in the output layer.
+        dropout_rate: Dropout rate applied after each hidden layer.
+        kernel_initializer: Initializer for weight matrices.
+        name: Name of the layer.
+        **kwargs: Standard Keras Layer arguments.
+
+    Returns:
+        Output tensor after passing through the deep network.
     """
     def __init__(self, 
                  hidden_layer_sizes: List[int], 
@@ -518,6 +500,15 @@ class DeepLayer(layers.Layer):
         super(DeepLayer, self).build(input_shape)
 
     def call(self, inputs):
+        """
+        Forward pass.
+
+        Args:
+            inputs: Input tensor [Batch, Max(N,M), Features].
+
+        Returns:
+            Output tensor [Batch, Max(N,M), Hidden] (if deep layer inside DeepRecurrent) or [Batch, Max(N,M)] (after squeeze).
+        """
         x = inputs
         for dense, dropout in zip(self.hidden_layers, self.dropouts):
             x = dense(x)
@@ -551,6 +542,15 @@ class DeepLayer(layers.Layer):
 class CustomNormalizationLayer(layers.Layer):
     """
     Performs Sum or Inverse normalization along an axis.
+
+    Args:
+        mode: 'sum' (normalize by sum) or 'inverse' (normalize by sum of inverses).
+        axis: Axis along which to normalize.
+        name: Name of the layer.
+        **kwargs: Standard Keras Layer arguments.
+
+    Returns:
+        Normalized tensor.
     """
     def __init__(self, 
                  mode: str = 'sum', 
@@ -564,6 +564,15 @@ class CustomNormalizationLayer(layers.Layer):
         self.axis = axis
 
     def call(self, x):
+        """
+        Normalizes input.
+
+        Args:
+            x: Input tensor.
+
+        Returns:
+            Normalized tensor.
+        """
         n = tf.cast(tf.shape(x)[self.axis], dtype=tf.float32)
         if self.mode == 'sum':
             x = n * x / tf.reduce_sum(x, axis=self.axis, keepdims=True)
@@ -589,6 +598,23 @@ class CustomNormalizationLayer(layers.Layer):
 class DeepRecurrentLayer(layers.Layer):
     """
     A deep recurrent network followed by a deep fully connected network.
+
+    Args:
+        recurrent_layer_sizes: List of integers, sizes of recurrent layers.
+        final_activation: Activation function for the final output.
+        final_hidden_layer_sizes: Sizes of hidden layers in the final dense network.
+        final_hidden_activation: Activation for hidden layers in the final dense network.
+        direction: 'bidirectional', 'forward', or 'backward'.
+        dropout: Dropout rate for dense layers.
+        recurrent_dropout: Dropout rate for recurrent layers.
+        recurrent_model: 'LSTM' or 'GRU'.
+        normalize: Normalization mode ('sum', 'inverse', or None).
+        bottleneck: Size of the bottleneck layer.
+        name: Name of the layer.
+        **kwargs: Standard Keras Layer arguments.
+
+    Returns:
+        Output tensor from the deep recurrent architecture.
     """
     def __init__(self, 
                  recurrent_layer_sizes: List[int],
@@ -654,6 +680,15 @@ class DeepRecurrentLayer(layers.Layer):
         super(DeepRecurrentLayer, self).build(input_shape)
 
     def call(self, inputs):
+        """
+        Forward pass of Deep RNN.
+
+        Args:
+            inputs: Tokenized input tensor [Batch, Max(N,M), Features].
+
+        Returns:
+            Output tensor [Batch, Max(N,M)].
+        """
         x = inputs
         for layer in self.recurrent_layers:
             x = layer(x)
@@ -688,12 +723,29 @@ class DeepRecurrentLayer(layers.Layer):
 class TakeTop(layers.Layer):
     """
     Layer that slices the first M columns of the input matrix.
+
+    Args:
+        **kwargs: Standard Keras Layer arguments.
+
+    Returns:
+        Tensor sliced to match the second dimension of the target matrix.
     """
     def __init__(self, **kwargs):
         super(TakeTop, self).__init__(**kwargs)
 
     
     def call(self, inputs):
+        """
+        Slices input matrix.
+
+        Args:
+            inputs: Tuple (Mat, target_Mat).
+            Mat: Input matrix (Shrinkage) [Batch, Max(N,M)].
+            target_Mat: Target matrix (Sxy) [Batch, K] where K=min(N, M).
+
+        Returns:
+            Sliced matrix [Batch, K].
+        """
         Mat, target_Mat = inputs
         
         target_shape = tf.shape(target_Mat)
@@ -706,10 +758,19 @@ class TakeTop(layers.Layer):
         config = super(TakeTop, self).get_config()
         return config
 
-@tf.keras.utils.register_keras_serializable(package='CCC_Functions', name='SVDReconstructFromFullLayer')
-class SVDReconstructFromFullLayer(tf.keras.layers.Layer):
+@tf.keras.utils.register_keras_serializable(package='CCC_Functions', name='SVDReconstructionLayer')
+class SVDReconstructionLayer(tf.keras.layers.Layer):
     """
     Reconstructs matrix from SVD components.
+
+    Computes C_hat = U_k @ diag(s_k) @ V_full[:, :, :r]^T.
+
+    Args:
+        name: Name of the layer.
+        **kwargs: Standard Keras Layer arguments.
+
+    Returns:
+        Reconstructed matrix tensor.
     """
     def __init__(self, 
                  name: Optional[str] = None, 
@@ -717,8 +778,20 @@ class SVDReconstructFromFullLayer(tf.keras.layers.Layer):
         super().__init__(name=name, **kwargs)
     
     def call(self, inputs):
+        """
+        Reconstructs matrix.
+
+        Args:
+            inputs: Tuple (s_k, U_full, V_full).
+            s_k: Singular values (Sxy_cleaned) [Batch, K].
+            U_full: Left singular vectors (Lxy) [Batch, N, N].
+            V_full: Right singular vectors (Rxy) [Batch, M, M].
+
+        Returns:
+            Reconstructed matrix (Cxy_denoised) [Batch, N, M].
+        """
         s_k, U_full, V_full = inputs
-        return svd_reconstruct_from_full(s_k, U_full, V_full)
+        return reconstruct_matrix_from_svd(s_k, U_full, V_full)
     
     def get_config(self):
         return super().get_config()

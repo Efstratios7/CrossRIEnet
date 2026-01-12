@@ -8,6 +8,18 @@ class GeneralizedCCCLayer(layers.Layer):
     """
     Generalized Cross-Correlation Correction (CCC) Layer.
     Uses deep learning to denoise cross-correlation matrices.
+
+    Args:
+        encoding_units: List of integers for the encoder dense layers.
+        lstm_units: List of integers for the LSTM layers.
+        final_hidden_layer_sizes: List of integers for the final dense layers.
+        multiplicative: If True, applies multiplicative shrinkage (for non-negative outputs).
+        final_activation: Activation function for the final output ('softplus', 'relu', 'sigmoid', 'linear', 'tanh').
+        outputs: List of keys specifying which outputs to return (default ['Cxy']).
+        **kwargs: Standard Keras Layer arguments.
+
+    Returns:
+         Denoised cross-correlation matrix tensor (or dictionary if multiple outputs selected).
     """
     def __init__(self, 
                  encoding_units: List[int], 
@@ -32,15 +44,15 @@ class GeneralizedCCCLayer(layers.Layer):
         self.outputs_keys = outputs
 
         # Components
-        self.svd_layer = cl.SVDViaEighFullLayer(name='SVD_Cxy')
-        self.diag_xx = cl.DiagVtCvLayer(name='DiagVtCv_xx')
-        self.diag_yy = cl.DiagVtCvLayer(name='DiagVtCv_yy')
+        self.svd_layer = cl.SpectralSVDLayer(name='SVD_Cxy')
+        self.diag_xx = cl.ProjectedVarianceDiagonalLayer(name='DiagVtCv_xx')
+        self.diag_yy = cl.ProjectedVarianceDiagonalLayer(name='DiagVtCv_yy')
         self.expand_dims = cl.ExpandDimsLayer()
-        self.dim_aware_xx = cl.DimAware2DLayer(name='DimAware2D_xx', features=['q1'])
-        self.dim_aware_yy = cl.DimAware2DLayer(name='DimAware2D_yy', features=['q2'])
-        self.pad_xy = cl.PadA2BSimpleLayer(name='Pad_xy')
-        self.pad_xx = cl.PadA2BSimpleLayer(name='Pad_xx')
-        self.pad_yy = cl.PadA2BSimpleLayer(name='Pad_yy')
+        self.dim_aware_xx = cl.DimensionAwarenessLayer(name='DimAware2D_xx', features=['q1'])
+        self.dim_aware_yy = cl.DimensionAwarenessLayer(name='DimAware2D_yy', features=['q2'])
+        self.pad_xy = cl.DimensionMatchingLayer(name='Pad_xy')
+        self.pad_xx = cl.DimensionMatchingLayer(name='Pad_xx')
+        self.pad_yy = cl.DimensionMatchingLayer(name='Pad_yy')
         self.concat = layers.Concatenate()
         
         if self.encoding_units:
@@ -55,10 +67,22 @@ class GeneralizedCCCLayer(layers.Layer):
             name='DeepRecurrent'
         )
         self.take_top = cl.TakeTop()
-        self.svd_recon = cl.SVDReconstructFromFullLayer(name='SVD_Reconstruct')
+        self.svd_recon = cl.SVDReconstructionLayer(name='SVD_Reconstruct')
 
     def call(self, inputs: List[Any]) -> Any:
-        # inputs: [Cxx, Cyy, Cxy, n_samples]
+        """
+        Forward pass of the CCC model.
+
+        Args:
+            inputs: List containing [Cxx, Cyy, Cxy, n_samples].
+            Cxx: Cross-covariance matrix of variable 1. [Batch, N, N]
+            Cyy: Cross-covariance matrix of variable 2. [Batch, M, M]
+            Cxy: Cross-correlation matrix of variable 1 and variable 2. [Batch, N, M]
+            n_samples: Number of samples. [Batch]
+
+        Returns:
+            Denoised Cxy (and optionally Sxy) depending on configuration. [Batch, N, M]
+        """
         Cxx, Cyy, Cxy, n_samples = inputs
         
         # SVD decomposition of cross-correlation matrix
