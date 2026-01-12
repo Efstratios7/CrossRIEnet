@@ -30,7 +30,7 @@ pip install -e .
 ## Quick Start
 
 ### Basic Usage
-The core component is the `CrossRIELayer`. It expects four inputs: the two marginal covariance matrices \newline ($\mathbf{C}_{XX}$, $\mathbf{C}_{YY}$), the cross-correlation matrix ($\mathbf{C}_{XY}$), and the number of samples ($n$).
+The core component is the `CrossRIELayer`. It expects four inputs: the two marginal covariance matrices ($\mathbf{C_{XX}}$, $\mathbf{C_{YY}}$), the cross-correlation matrix ($\mathbf{C_{XY}}$), and the number of samples ($n$).
 
 ```python
 import tensorflow as tf
