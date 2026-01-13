@@ -98,11 +98,11 @@ Cxy = tf.random.normal((B, N, M))
 # Shape: (Batch, 1) or (Batch,)
 T_samples = tf.constant([[float(T)] for _ in range(B)]) 
 
-# Target Variable (Cleaned Cxy)
+# Target Variable
 # In supervised learning, this would be the "true" cross-correlation.
-Y_target = tf.random.normal((B, N, M))
+Cxy_target = tf.random.normal((B, N, M))
 
-model.fit([Cxx, Cyy, Cxy, T_samples], Y_target, epochs=1, batch_size=32)
+model.fit([Cxx, Cyy, Cxy, T_samples], Cxy_target, epochs=1, batch_size=32)
 ```
 
 ### Different Output Types

@@ -19,8 +19,8 @@ dependencies = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/manolakis/CCC-package"
-"Bug Tracker" = "https://github.com/manolakis/CCC-package/issues"
+"Homepage" = "https://github.com/Efstratios7/CrossRIE"
+"Bug Tracker" = "https://github.com/Efstratios7/CrossRIE/issues"
 
 [tool.setuptools.packages.find]
 include = ["crossrie*"]
