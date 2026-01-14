@@ -786,3 +786,107 @@ class SVDReconstructionLayer(tf.keras.layers.Layer):
     
     def get_config(self):
         return super().get_config()
+
+@tf.keras.utils.register_keras_serializable(package='crossrie', name='Two_Stream_EncoderLayer')
+class Two_Stream_EncoderLayer(layers.Layer):
+    """
+    Two-stream encoder layer that processes paired inputs and aggregates them.
+
+    Args:
+        encoding_units: List of integers for the shared encoder (MLP) structure.
+        lstm_units: List of integers for the recurrent aggregator hidden sizes.
+        final_hidden_layer_sizes: List of integers for the final hidden layers.
+        final_activation: Activation function for the final output.
+        name: Name of the layer.
+        **kwargs: Standard Keras Layer arguments.
+
+    Returns:
+        Aggregated head tensor.
+    """
+    def __init__(self,
+                 encoding_units: List[int] = [16, 2],
+                 lstm_units: List[int] = [128, 64],
+                 final_hidden_layer_sizes: List[int] = [252],
+                 final_activation: str = 'leaky_relu',
+                 name: Optional[str] = None,
+                 **kwargs):
+        super(Two_Stream_EncoderLayer, self).__init__(name=name, **kwargs)
+        self.encoding_units = encoding_units
+        self.lstm_units = lstm_units
+        self.final_hidden_layer_sizes = final_hidden_layer_sizes
+        self.final_activation = final_activation
+
+        if self.encoding_units:
+            self.encoder = DeepLayer(hidden_layer_sizes=self.encoding_units, name='Encoder_Deep')
+        else:
+            self.encoder = None
+
+        self.shrinkage = DeepRecurrentLayer(
+            recurrent_layer_sizes=self.lstm_units,
+            final_hidden_layer_sizes=self.final_hidden_layer_sizes,
+            final_activation=self.final_activation,
+            name='DeepRecurrent'
+        )
+
+    def build(self, input_shape):
+        """
+        Builds the layer.
+
+        Args:
+            input_shape: List of two input shapes [shape_Pxx_Sxy, shape_Pyy_Sxy] 
+                         or a single shape if passed as a list.
+                         Each shape is (Batch, M, Features).
+        """
+        # input_shape is likely a list of shapes [shape1, shape2]
+        if isinstance(input_shape, list) and len(input_shape) > 0:
+            first_shape = input_shape[0]
+        else:
+            first_shape = input_shape
+
+        # first_shape is (None, None, Channels)
+        total_channels = first_shape[-1]
+
+        if self.encoder:
+            self.encoder.build(first_shape)
+            token_dim = self.encoding_units[-1]
+        else:
+            token_dim = total_channels
+            
+        self.shrinkage.build((first_shape[0], first_shape[1], token_dim))
+        super(Two_Stream_EncoderLayer, self).build(input_shape)
+
+    def call(self, inputs):
+        """
+        Forward pass.
+
+        Args:
+            inputs: List [Pxx_Sxy, Pyy_Sxy].
+            Pxx_Sxy: Concatenated features for X stream [Batch, M, F].
+            Pyy_Sxy: Concatenated features for Y stream [Batch, M, F].
+
+        Returns:
+            aggregator_head: Output from shrinkage layer.
+        """
+        Pxx_Sxy, Pyy_Sxy = inputs
+
+        if self.encoder:
+            Tokens = self.encoder(Pxx_Sxy) + self.encoder(Pyy_Sxy) 
+        else:
+            Tokens = Pxx_Sxy + Pyy_Sxy
+            
+        aggregator_head = self.shrinkage(Tokens)
+        return aggregator_head
+
+    def get_config(self):
+        config = super(Two_Stream_EncoderLayer, self).get_config()
+        config.update({
+            'encoding_units': self.encoding_units,
+            'lstm_units': self.lstm_units,
+            'final_hidden_layer_sizes': self.final_hidden_layer_sizes,
+            'final_activation': self.final_activation
+        })
+        return config
+
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)

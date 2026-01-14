@@ -55,16 +55,14 @@ class CrossRIELayer(layers.Layer):
         self.pad_yy = cl.DimensionMatchingLayer(name='Pad_yy')
         self.concat = layers.Concatenate()
         
-        if self.encoding_units:
-            self.encoder = cl.DeepLayer(hidden_layer_sizes=self.encoding_units, name='Encoder_Deep')
-        else:
-            self.encoder = None
 
-        self.shrinkage = cl.DeepRecurrentLayer(
-            recurrent_layer_sizes=self.lstm_units, 
+
+        self.two_stream_encoder = cl.Two_Stream_EncoderLayer(
+            encoding_units=self.encoding_units,
+            lstm_units=self.lstm_units,
             final_hidden_layer_sizes=self.final_hidden_layer_sizes,
-            final_activation=self.final_activation, 
-            name='DeepRecurrent'
+            final_activation=self.final_activation,
+            name='TwoStreamEncoder'
         )
         self.take_top = cl.TakeTop()
         self.svd_recon = cl.SVDReconstructionLayer(name='SVD_Reconstruct')
@@ -80,18 +78,18 @@ class CrossRIELayer(layers.Layer):
         # Pxx_expanded has 1 + len(dim_aware_xx.features) channels
         # Sxy_padded has 1 channel
         channels_xx = 1 + len(self.dim_aware_xx.features)
-        total_channels = channels_xx + 1 # +1 for Sxy
+        channels_yy = 1 + len(self.dim_aware_yy.features)
         
+        if channels_xx != channels_yy and self.encoding_units:
+            raise ValueError(f"Channel mismatch for shared encoder: channels_xx={channels_xx}, channels_yy={channels_yy}. Both streams must have same number of features.")
+        
+        total_channels_xx = channels_xx + 1 # +1 for Sxy
+        total_channels_yy = channels_yy + 1 # +1 for Sxy
+
         # Build encoder
-        if self.encoder:
-            # Input shape: (Batch, SequenceLength, Features)
-            self.encoder.build((None, None, total_channels))
-            token_dim = self.encoding_units[-1]
-        else:
-            token_dim = total_channels
-            
-        # Build shrinkage (LSTM + Dense heads)
-        self.shrinkage.build((None, None, token_dim))
+        # Input shape: (Batch, SequenceLength, Features)
+        # Pxx_Sxy has shape (Batch, M, total_channels_xx)
+        self.two_stream_encoder.build([(None, None, total_channels_xx), (None, None, total_channels_yy)])
         
         super(CrossRIELayer, self).build(input_shape)
 
@@ -130,18 +128,13 @@ class CrossRIELayer(layers.Layer):
         Pxx_Sxy = self.concat([Pxx_padded, Sxy_padded])
         Pyy_Sxy = self.concat([Pyy_padded, Sxy_padded])
         
-        if self.encoder:
-            Tokens = self.encoder(Pxx_Sxy) + self.encoder(Pyy_Sxy) # (B, M, 4)
-        else:
-            Tokens = Pxx_Sxy + Pyy_Sxy
-            
-        aggregator_head = self.shrinkage(Tokens)
-        aggregator_head = self.take_top([aggregator_head, Sxy])
+        aggregator_head = self.two_stream_encoder([Pxx_Sxy, Pyy_Sxy])
+        aggregated_head = self.take_top([aggregator_head, Sxy])
         
         if self.multiplicative:
-            Sxy_cleaned = aggregator_head * Sxy
+            Sxy_cleaned = aggregated_head * Sxy
         else:
-            Sxy_cleaned = aggregator_head + Sxy
+            Sxy_cleaned = aggregated_head + Sxy
             
         outputs_dict = {'Sxy': Sxy_cleaned}
         if 'Cxy' in self.outputs_keys:
