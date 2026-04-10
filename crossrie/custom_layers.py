@@ -807,7 +807,7 @@ class Two_Stream_EncoderLayer(layers.Layer):
                  encoding_units: List[int] = [16, 2],
                  lstm_units: List[int] = [128, 64],
                  final_hidden_layer_sizes: List[int] = [252],
-                 final_activation: str = 'leaky_relu',
+                 final_activation: str = 'linear',
                  name: Optional[str] = None,
                  **kwargs):
         super(Two_Stream_EncoderLayer, self).__init__(name=name, **kwargs)

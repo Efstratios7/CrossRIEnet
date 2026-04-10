@@ -26,7 +26,7 @@ class CrossRIELayer(layers.Layer):
                  lstm_units: List[int] = [128,64], 
                  final_hidden_layer_sizes: List[int] = [252],
                  multiplicative: bool = False, 
-                 final_activation: str = 'leaky_relu', 
+                 final_activation: str = 'linear', 
                  outputs: List[str] = ['Cxy'], 
                  **kwargs):
         super(CrossRIELayer, self).__init__(**kwargs)
