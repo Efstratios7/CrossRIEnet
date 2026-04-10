@@ -87,7 +87,8 @@ def spectral_svd_decomposition(C: tf.Tensor,
    W1 = W0 - tf.matmul(V1, V1tW0)
 
    # QR decomposition of W1
-   V2, _ = tf.linalg.qr(W1, full_matrices=False)                # [B, m, m-r]
+   V2, _ = tf.linalg.qr(tf.stop_gradient(W1), full_matrices=False)              # [B, m, m-r]
+   V2 = tf.stop_gradient(V2)
 
    # V_full = [V1 | V2]
    V_full = tf.concat([V1, V2], axis=2)                         # [B, m, m]

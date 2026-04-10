@@ -1,273 +1,186 @@
 import unittest
 import sys
 import os
+
+# Suppress TensorFlow C++ backend logs for cleaner test output
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
+
 import tensorflow as tf
 from keras import losses, optimizers
-import numpy as np
-import random
-
 from crossrie import CrossRIELayer
 
 class TestCrossRIELayer(unittest.TestCase):
-    def setUp(self):
-        # Default baseline parameters
-        self.B = 2
-        self.N = 5
-        self.M = 10
-        self.T = 100
-        self.encoding_units = [8]
-        self.lstm_units = [16]
-        self.final_hidden_layer_sizes = [8]
-        
-    def test_model_initialization_additive(self):
-        """Test instantiation and forward pass in Additive mode"""
-        model = CrossRIELayer(
-            encoding_units=self.encoding_units,
-            lstm_units=self.lstm_units,
-            final_hidden_layer_sizes=self.final_hidden_layer_sizes,
-            multiplicative=False,
-            final_activation='linear',
+    def _run_dynamic_training_test(self, layer, N_range=(20, 50), M_range=(20, 50)):
+        import sys
+        import os
+        sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from tests.data_generator import get_dynamic_dataset
 
-        )
-        
-        Cxx = tf.random.normal((self.B, self.N, self.N))
-        Cyy = tf.random.normal((self.B, self.M, self.M))
-        Cxy = tf.random.normal((self.B, self.N, self.M))
-        T_samples = tf.constant([self.T] * self.B)
-        
-        output = model([Cxx, Cyy, Cxy, T_samples])
-        
-        # Output should be (B, N, M) - corresponding to Cxy shape
-        self.assertEqual(output.shape, (self.B, self.N, self.M))
-
-    def test_model_initialization_multiplicative(self):
-        """Test instantiation and forward pass in Multiplicative mode"""
-        model = CrossRIELayer(
-            encoding_units=self.encoding_units,
-            lstm_units=self.lstm_units,
-            final_hidden_layer_sizes=self.final_hidden_layer_sizes,
-            multiplicative=True,
-            final_activation='softplus',
-
-        )
-        
-        Cxx = tf.random.normal((self.B, self.N, self.N))
-        Cyy = tf.random.normal((self.B, self.M, self.M))
-        Cxy = tf.random.normal((self.B, self.N, self.M))
-        T_samples = tf.constant([self.T] * self.B)
-        
-        output = model([Cxx, Cyy, Cxy, T_samples])
-        self.assertEqual(output.shape, (self.B, self.N, self.M))
-
-
-
-    def test_varying_architectures(self):
-        """Test different network depths and widths"""
-        configs = [
-            {'encoding': [32, 16], 'lstm': [64], 'final': [32]},
-            {'encoding': [], 'lstm': [16], 'final': []}, # Minimal
-            {'encoding': [8], 'lstm': [8, 8], 'final': [4]} # Deep recurrent
-        ]
-        
-        for conf in configs:
-            with self.subTest(config=conf):
-                model = CrossRIELayer(
-                    encoding_units=conf['encoding'],
-                    lstm_units=conf['lstm'],
-                    final_hidden_layer_sizes=conf['final'],
-                    multiplicative=True,
-                    final_activation='softplus'
-                )
-                
-                Cxx = tf.random.normal((self.B, self.N, self.N))
-                Cyy = tf.random.normal((self.B, self.M, self.M))
-                Cxy = tf.random.normal((self.B, self.N, self.M))
-                T_samples = tf.constant([self.T] * self.B)
-                
-                output = model([Cxx, Cyy, Cxy, T_samples])
-                self.assertEqual(output.shape, (self.B, self.N, self.M))
-
-    def test_valid_activations(self):
-        """Test all supported activation functions for multiplicative mode"""
-        activations = ['softplus', 'relu', 'sigmoid']
-        for act in activations:
-            with self.subTest(activation=act):
-                model = CrossRIELayer(
-                    encoding_units=self.encoding_units,
-                    lstm_units=self.lstm_units,
-                    final_hidden_layer_sizes=self.final_hidden_layer_sizes,
-                    multiplicative=True,
-                    final_activation=act
-                )
-                # Just verify it builds and runs without error
-                Cxx = tf.random.normal((self.B, self.N, self.N))
-                Cyy = tf.random.normal((self.B, self.M, self.M))
-                Cxy = tf.random.normal((self.B, self.N, self.M))
-                T_samples = tf.constant([self.T] * self.B)
-                model([Cxx, Cyy, Cxy, T_samples])
-
-    def test_additive_activations(self):
-        """Test supported activations for additive mode"""
-        activations = ['linear', 'tanh']
-        for act in activations:
-             with self.subTest(activation=act):
-                model = CrossRIELayer(
-                    encoding_units=self.encoding_units,
-                    lstm_units=self.lstm_units,
-                    final_hidden_layer_sizes=self.final_hidden_layer_sizes,
-                    multiplicative=False,
-                    final_activation=act
-                )
-                Cxx = tf.random.normal((self.B, self.N, self.N))
-                Cyy = tf.random.normal((self.B, self.M, self.M))
-                Cxy = tf.random.normal((self.B, self.N, self.M))
-                T_samples = tf.constant([self.T] * self.B)
-                model([Cxx, Cyy, Cxy, T_samples])
-
-    def test_invalid_activation_config(self):
-        """Test validation logic for activation functions"""
-        with self.assertRaises(ValueError):
-            CrossRIELayer(
-                encoding_units=self.encoding_units,
-                lstm_units=self.lstm_units,
-                final_hidden_layer_sizes=self.final_hidden_layer_sizes,
-                multiplicative=True,
-                final_activation='linear', # Invalid for multiplicative
-
-            )
-
-    def test_large_dimensions(self):
-        """Stress test with slightly larger matrices"""
-        N_large = 50
-        M_large = 60
-        model = CrossRIELayer(
-            encoding_units=[16],
-            lstm_units=[16],
-            final_hidden_layer_sizes=[16],
-            multiplicative=True,
-            final_activation='softplus'
-        )
-        Cxx = tf.random.normal((self.B, N_large, N_large))
-        Cyy = tf.random.normal((self.B, M_large, M_large))
-        Cxy = tf.random.normal((self.B, N_large, M_large))
-        T_samples = tf.constant([200.0] * self.B)
-        
-        output = model([Cxx, Cyy, Cxy, T_samples])
-        self.assertEqual(output.shape, (self.B, N_large, M_large))
-
-
-    def test_training_simulation(self):
-        """Simulate a user training the model with random data"""
-        # 1. Setup Data
-        B, N, M = 4, 10, 10
-        Cxx = tf.random.normal((B, N, N))
-        Cyy = tf.random.normal((B, M, M))
-        Cxy_noisy = tf.random.normal((B, N, M))
-        T_samples = tf.constant([self.T] * B)
-        
-        # Target (Clean Cxy)
-        Cxy_clean = tf.random.normal((B, N, M))
-        
-        # 2. Initialize Layer
-        layer = CrossRIELayer(
-            encoding_units=[16],
-            lstm_units=[16],
-            final_hidden_layer_sizes=[8],
-            multiplicative=True,
-            final_activation='softplus'
-        )
-        
-        # Define Inputs
-        in_Cxx = tf.keras.Input(shape=(N, N))
-        in_Cyy = tf.keras.Input(shape=(M, M))
-        in_Cxy = tf.keras.Input(shape=(N, M))
+        # Define Inputs EXPLICITLY with abstract `None` shapes.
+        in_Cxx = tf.keras.Input(shape=(None, None))
+        in_Cyy = tf.keras.Input(shape=(None, None))
+        in_Cxy = tf.keras.Input(shape=(None, None))
         in_n = tf.keras.Input(shape=())
         
         # Build Model
         out = layer([in_Cxx, in_Cyy, in_Cxy, in_n])
         model = tf.keras.Model(inputs=[in_Cxx, in_Cyy, in_Cxy, in_n], outputs=out)
         
-        # 3. Compile
         optimizer = optimizers.Adam(learning_rate=1e-3)
         loss_fn = losses.MeanSquaredError()
         model.compile(optimizer=optimizer, loss=loss_fn)
         
-        # 4. Train for one step
-        # Note: input is [Cxx, Cyy, Cxy, T_samples]
+        # Pull Dynamic Dataset Pipeline
+        dataset = get_dynamic_dataset(batch_size=16, N_range=N_range, M_range=M_range)
+        
         history = model.fit(
-            x=[Cxx, Cyy, Cxy_noisy, T_samples],
-            y=Cxy_clean,
-            epochs=1,
-            batch_size=2,
+            dataset,
+            epochs=10,
+            steps_per_epoch=21,
             verbose=0
         )
         
-        # 5. Check loss exists
-        loss = history.history['loss'][0]
-        self.assertIsInstance(loss, float)
-        self.assertGreater(loss, 0.0)
+        self.assertEqual(len(history.history['loss']), 10)
+        self.assertGreater(history.history['loss'][-1], 0.0)
         
-        # 6. Check forward pass after training
-        pred = model.predict([Cxx, Cyy, Cxy_noisy, T_samples])
-        self.assertEqual(pred.shape, (B, N, M))
+        pred_data = next(iter(dataset.take(1)))
+        inputs_pred, _ = pred_data
+        
+        pred = model.predict(inputs_pred, verbose=0)
+        
+        expected_shape = inputs_pred[0].shape
+        self.assertEqual(pred.shape, (16, expected_shape[1], inputs_pred[1].shape[1]))
 
-
-    def test_training_variable_dimensions(self):
-        """Simulate training with random variable dimensions (Days [200,600], Stocks [100,250])"""
-        # Random dimensions
-        ndays = random.randint(200, 600)
-        nstocks_N = random.randint(100, 250)
-        nstocks_M = random.randint(100, 250)
+    def test_static_model_training(self):
+        """Test simple training over 2 epochs utilizing exclusively static dimensions initialized uniformly across graph and data."""
+        import sys
+        import os
+        sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from tests.data_generator import get_dynamic_dataset
         
-        # print(f"\nRunning variable dimension test with: T={ndays}, N={nstocks_N}, M={nstocks_M}")
-        
-        # 1. Setup Data
-        B = 2
-        Cxx = tf.random.normal((B, nstocks_N, nstocks_N))
-        Cyy = tf.random.normal((B, nstocks_M, nstocks_M))
-        Cxy_noisy = tf.random.normal((B, nstocks_N, nstocks_M))
-        T_samples = tf.constant([float(ndays)] * B)
-        
-        # Target
-        Cxy_clean = tf.random.normal((B, nstocks_N, nstocks_M))
-        
-        # 2. Initialize Layer
+        # 1. Initialize Layer
         layer = CrossRIELayer(
-            encoding_units=[32],
-            lstm_units=[16],
-            final_hidden_layer_sizes=[16],
-            multiplicative=True,
-            final_activation='softplus'
+            encoding_units=[8], lstm_units=[16], final_hidden_layer_sizes=[8],
+            multiplicative=True, final_activation='softplus'
         )
         
-        # Define Inputs
-        in_Cxx = tf.keras.Input(shape=(nstocks_N, nstocks_N))
-        in_Cyy = tf.keras.Input(shape=(nstocks_M, nstocks_M))
-        in_Cxy = tf.keras.Input(shape=(nstocks_N, nstocks_M))
+        # Lock exact dimensions
+        b_size, N_static, M_static, T_static = 8, 25, 30, 200
+        
+        # Define Inputs with rigid explicit shapes locking completely (opposite of variable)
+        in_Cxx = tf.keras.Input(shape=(N_static, N_static))
+        in_Cyy = tf.keras.Input(shape=(M_static, M_static))
+        in_Cxy = tf.keras.Input(shape=(N_static, M_static))
         in_n = tf.keras.Input(shape=())
         
         # Build Model
         out = layer([in_Cxx, in_Cyy, in_Cxy, in_n])
         model = tf.keras.Model(inputs=[in_Cxx, in_Cyy, in_Cxy, in_n], outputs=out)
         
-        # 3. Compile
         model.compile(optimizer='adam', loss='mse')
         
-        # 4. Train
+        # Limit pipeline specifically to generate exactly these bounds
+        dataset = get_dynamic_dataset(
+            batch_size=b_size,
+            N_range=(N_static, N_static),
+            M_range=(M_static, M_static),
+            ndays_range=(T_static, T_static)
+        )
+        
+        # Evaluate for specifically 2 epochs
         history = model.fit(
-            x=[Cxx, Cyy, Cxy_noisy, T_samples],
-            y=Cxy_clean,
-            epochs=1,
-            batch_size=B,
+            dataset,
+            epochs=2,
+            steps_per_epoch=5,
             verbose=0
         )
         
-        loss = history.history['loss'][0]
-        self.assertGreater(loss, 0.0)
+        self.assertEqual(len(history.history['loss']), 2)
+
+    def test_model_initialization_additive(self):
+        """Test instantiation and full robust training string in Additive mode"""
+        layer = CrossRIELayer(
+            encoding_units=[8], lstm_units=[16], final_hidden_layer_sizes=[8],
+            multiplicative=False, final_activation='linear'
+        )
+        self._run_dynamic_training_test(layer)
+
+    def test_model_initialization_multiplicative(self):
+        """Test instantiation and full robust training string in Multiplicative mode"""
+        layer = CrossRIELayer(
+            encoding_units=[8], lstm_units=[16], final_hidden_layer_sizes=[8],
+            multiplicative=True, final_activation='softplus'
+        )
+        self._run_dynamic_training_test(layer)
+
+    def test_varying_architectures(self):
+        """Test different network depths and widths across rigorous epochs"""
+        configs = [
+            {'encoding': [32, 16], 'lstm': [64], 'final': [32]},
+            {'encoding': [], 'lstm': [16], 'final': []},
+            {'encoding': [8], 'lstm': [8, 8], 'final': [4]}
+        ]
         
-        # 5. Predict
-        pred = model.predict([Cxx, Cyy, Cxy_noisy, T_samples])
-        self.assertEqual(pred.shape, (B, nstocks_N, nstocks_M))
+        for conf in configs:
+            with self.subTest(config=conf):
+                layer = CrossRIELayer(
+                    encoding_units=conf['encoding'], lstm_units=conf['lstm'], final_hidden_layer_sizes=conf['final'],
+                    multiplicative=True, final_activation='softplus'
+                )
+                self._run_dynamic_training_test(layer)
+
+    def test_valid_activations(self):
+        """Test all supported activation functions continuously for multiplicative mode"""
+        activations = ['softplus', 'relu', 'sigmoid']
+        for act in activations:
+            with self.subTest(activation=act):
+                layer = CrossRIELayer(
+                    encoding_units=[8], lstm_units=[16], final_hidden_layer_sizes=[8],
+                    multiplicative=True, final_activation=act
+                )
+                self._run_dynamic_training_test(layer)
+
+    def test_additive_activations(self):
+        """Test all supported activation functions continuously for additive mode"""
+        activations = ['linear', 'tanh']
+        for act in activations:
+             with self.subTest(activation=act):
+                layer = CrossRIELayer(
+                    encoding_units=[8], lstm_units=[16], final_hidden_layer_sizes=[8],
+                    multiplicative=False, final_activation=act
+                )
+                self._run_dynamic_training_test(layer)
+
+    def test_invalid_activation_config(self):
+        """Test validation logic (static validation behavior unchanged)"""
+        with self.assertRaises(ValueError):
+            CrossRIELayer(
+                multiplicative=True, final_activation='linear'
+            )
+
+    def test_large_dimensions(self):
+        """Stress test with explicitly large variable matrix spaces natively passed into variable training logic."""
+        layer = CrossRIELayer(
+            encoding_units=[16], lstm_units=[16], final_hidden_layer_sizes=[16],
+            multiplicative=True, final_activation='softplus'
+        )
+        self._run_dynamic_training_test(layer, N_range=(250, 300), M_range=(250, 300),ndays_range=(200,250))
+
+    def test_training_simulation(self):
+        """Formerly a test for 1 epoch, now identically verified natively through the standard high iteration handler."""
+        layer = CrossRIELayer(
+            encoding_units=[16], lstm_units=[16], final_hidden_layer_sizes=[8],
+            multiplicative=True, final_activation='softplus'
+        )
+        self._run_dynamic_training_test(layer)
+
+    def test_training_variable_dimensions(self):
+        """The baseline variable dimension explicit trainer implementation, integrated comprehensively into _run_dynamic_training_test."""
+        layer = CrossRIELayer(
+            encoding_units=[32], lstm_units=[16], final_hidden_layer_sizes=[16],
+            multiplicative=True, final_activation='softplus'
+        )
+        self._run_dynamic_training_test(layer)
 
 if __name__ == '__main__':
     unittest.main()
