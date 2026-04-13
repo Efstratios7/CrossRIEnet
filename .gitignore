@@ -29,6 +29,9 @@ datasets/
 # OS
 .DS_Store
 
+# Testing
+.pytest_cache/
+
 # Project-specific
 my_test.ipynb
 verification_script.py

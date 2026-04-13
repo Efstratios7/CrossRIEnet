@@ -138,7 +138,11 @@ s_tilde = layer_s([Cxx, Cyy, Cxy, T_samples])
 git clone https://github.com/Efstratios7/CrossRIE.git
 cd CrossRIE
 pip install -e ".[dev]"
-pytest tests/
+```
+
+### Running Tests
+```bash
+pytest tests/test_crossrie.py -v
 ```
 
 ## Citation
