@@ -41,11 +41,11 @@ class TestCrossRIELayer(unittest.TestCase):
         model.compile(optimizer=optimizers.Adam(learning_rate=1e-3),
                        loss=losses.MeanSquaredError())
 
-        Cxx = tf.random.normal((B, N, N))
-        Cyy = tf.random.normal((B, M, M))
-        Cxy = tf.random.normal((B, N, M))
-        T_s = tf.constant([float(T)] * B)
-        target = tf.random.normal((B, N, M))
+        Cxx = tf.random.normal((B, N, N), dtype=tf.float64)
+        Cyy = tf.random.normal((B, M, M), dtype=tf.float64)
+        Cxy = tf.random.normal((B, N, M), dtype=tf.float64)
+        T_s = tf.constant([float(T)] * B, dtype=tf.float64)
+        target = tf.random.normal((B, N, M), dtype=tf.float64)
 
         loss = model.train_on_batch([Cxx, Cyy, Cxy, T_s], target)
         return model, loss
@@ -121,10 +121,10 @@ class TestCrossRIELayer(unittest.TestCase):
         )
         model, _ = self._build_and_train(layer, B=B, N=N, M=M)
 
-        Cxx = tf.random.normal((B, N, N))
-        Cyy = tf.random.normal((B, M, M))
-        Cxy = tf.random.normal((B, N, M))
-        T_s = tf.constant([100.0] * B)
+        Cxx = tf.random.normal((B, N, N), dtype=tf.float64)
+        Cyy = tf.random.normal((B, M, M), dtype=tf.float64)
+        Cxy = tf.random.normal((B, N, M), dtype=tf.float64)
+        T_s = tf.constant([100.0] * B, dtype=tf.float64)
         pred = model.predict([Cxx, Cyy, Cxy, T_s], verbose=0)
         self.assertEqual(pred.shape, (B, N, M))
 
@@ -137,11 +137,11 @@ class TestCrossRIELayer(unittest.TestCase):
         model, _ = self._build_and_train(layer, N=5, M=7)
 
         for N, M in [(8, 4), (3, 10), (6, 6)]:
-            Cxx = tf.random.normal((2, N, N))
-            Cyy = tf.random.normal((2, M, M))
-            Cxy = tf.random.normal((2, N, M))
-            T_s = tf.constant([100.0, 100.0])
-            target = tf.random.normal((2, N, M))
+            Cxx = tf.random.normal((2, N, N), dtype=tf.float64)
+            Cyy = tf.random.normal((2, M, M), dtype=tf.float64)
+            Cxy = tf.random.normal((2, N, M), dtype=tf.float64)
+            T_s = tf.constant([100.0, 100.0], dtype=tf.float64)
+            target = tf.random.normal((2, N, M), dtype=tf.float64)
             loss = model.train_on_batch([Cxx, Cyy, Cxy, T_s], target)
             self.assertGreater(loss, 0.0, f"Zero loss for N={N}, M={M}")
 
@@ -155,11 +155,11 @@ class TestCrossRIELayer(unittest.TestCase):
         model, loss = self._build_and_train(layer, B=B, N=N, M=M, T=T)
         self.assertGreater(loss, 0.0)
 
-        Cxx = tf.random.normal((B, N, N))
-        Cyy = tf.random.normal((B, M, M))
-        Cxy = tf.random.normal((B, N, M))
-        T_s = tf.constant([float(T)] * B)
-        target = tf.random.normal((B, N, M))
+        Cxx = tf.random.normal((B, N, N), dtype=tf.float64)
+        Cyy = tf.random.normal((B, M, M), dtype=tf.float64)
+        Cxy = tf.random.normal((B, N, M), dtype=tf.float64)
+        T_s = tf.constant([float(T)] * B, dtype=tf.float64)
+        target = tf.random.normal((B, N, M), dtype=tf.float64)
         loss2 = model.train_on_batch([Cxx, Cyy, Cxy, T_s], target)
         self.assertGreater(loss2, 0.0)
 
@@ -197,47 +197,53 @@ class TestSvdViaEighFull(unittest.TestCase):
 
     def test_forward_correctness(self):
         """SVD reconstruction should approximate the original matrix."""
-        C = tf.random.normal((4, 6, 8), dtype=tf.float32)
+        tf.random.set_seed(42)
+        C = tf.random.normal((4, 6, 8), dtype=tf.float64)
         s_k, U_full, V_full = svd_via_eigh_full(C)
         C_hat = reconstruct_matrix_from_svd(s_k, U_full, V_full)
-        np.testing.assert_allclose(C.numpy(), C_hat.numpy(), atol=1e-4)
+        np.testing.assert_allclose(C.numpy(), C_hat.numpy(), atol=1e-8)
 
     def test_singular_values_nonnegative(self):
         """Singular values must be non-negative."""
-        C = tf.random.normal((3, 10, 5), dtype=tf.float32)
+        tf.random.set_seed(42)
+        C = tf.random.normal((3, 10, 5), dtype=tf.float64)
         s_k, _, _ = svd_via_eigh_full(C)
         self.assertTrue(np.all(s_k.numpy() >= 0))
 
     def test_orthonormality_U(self):
         """U_full columns should be orthonormal."""
-        C = tf.random.normal((2, 7, 9), dtype=tf.float32)
+        tf.random.set_seed(42)
+        C = tf.random.normal((2, 7, 9), dtype=tf.float64)
         _, U_full, _ = svd_via_eigh_full(C)
         UtU = tf.matmul(U_full, U_full, transpose_a=True)
-        eye = tf.eye(tf.shape(U_full)[2], batch_shape=[2])
-        np.testing.assert_allclose(UtU.numpy(), eye.numpy(), atol=1e-4)
+        eye = tf.eye(tf.shape(U_full)[2], batch_shape=[2], dtype=tf.float64)
+        np.testing.assert_allclose(UtU.numpy(), eye.numpy(), atol=1e-8)
 
     def test_orthonormality_V(self):
         """V_full columns should be orthonormal."""
-        C = tf.random.normal((2, 5, 8), dtype=tf.float32)
+        tf.random.set_seed(42)
+        C = tf.random.normal((2, 5, 8), dtype=tf.float64)
         _, _, V_full = svd_via_eigh_full(C)
         VtV = tf.matmul(V_full, V_full, transpose_a=True)
-        eye = tf.eye(tf.shape(V_full)[2], batch_shape=[2])
-        np.testing.assert_allclose(VtV.numpy(), eye.numpy(), atol=1e-4)
+        eye = tf.eye(tf.shape(V_full)[2], batch_shape=[2], dtype=tf.float64)
+        np.testing.assert_allclose(VtV.numpy(), eye.numpy(), atol=1e-8)
 
     def test_square_matrix(self):
         """Should handle square matrices (n == m)."""
-        C = tf.random.normal((3, 6, 6), dtype=tf.float32)
+        tf.random.set_seed(42)
+        C = tf.random.normal((3, 6, 6), dtype=tf.float64)
         s_k, U_full, V_full = svd_via_eigh_full(C)
         C_hat = reconstruct_matrix_from_svd(s_k, U_full, V_full)
-        np.testing.assert_allclose(C.numpy(), C_hat.numpy(), atol=1e-4)
+        np.testing.assert_allclose(C.numpy(), C_hat.numpy(), atol=1e-8)
 
     def test_tall_matrix(self):
         """Should handle tall matrices (n > m)."""
-        C = tf.random.normal((2, 12, 4), dtype=tf.float32)
+        tf.random.set_seed(42)
+        C = tf.random.normal((2, 12, 4), dtype=tf.float64)
         s_k, U_full, V_full = svd_via_eigh_full(C)
         self.assertEqual(s_k.shape[1], 4)
         C_hat = reconstruct_matrix_from_svd(s_k, U_full, V_full)
-        np.testing.assert_allclose(C.numpy(), C_hat.numpy(), atol=1e-4)
+        np.testing.assert_allclose(C.numpy(), C_hat.numpy(), atol=1e-8)
 
 
 # ============================================================================
@@ -261,7 +267,8 @@ class TestSvdGradientGraphMode(unittest.TestCase):
                 loss = tf.reduce_sum(s_k)
             return tape.gradient(loss, C)
 
-        C = tf.random.normal((2, 5, 8))
+        tf.random.set_seed(42)
+        C = tf.random.normal((2, 5, 8), dtype=tf.float64)
         grad = compute_grad(C)
         self.assertIsNotNone(grad)
         self.assertFalse(np.any(np.isnan(grad.numpy())))
@@ -278,7 +285,8 @@ class TestSvdGradientGraphMode(unittest.TestCase):
             return tape.gradient(loss, C)
 
         for n, m in [(5, 8), (10, 3), (7, 7), (20, 15)]:
-            C = tf.random.normal((2, n, m))
+            tf.random.set_seed(42)
+            C = tf.random.normal((2, n, m), dtype=tf.float64)
             grad = compute_grad(C)
             self.assertEqual(grad.shape, C.shape,
                              f"Gradient shape mismatch for n={n}, m={m}")
@@ -297,7 +305,8 @@ class TestSvdGradientGraphMode(unittest.TestCase):
                 loss = tf.reduce_sum(C_hat ** 2)
             return tape.gradient(loss, C)
 
-        C = tf.random.normal((3, 6, 9))
+        tf.random.set_seed(42)
+        C = tf.random.normal((3, 6, 9), dtype=tf.float64)
         grad = compute_grad(C)
         self.assertIsNotNone(grad)
         self.assertFalse(np.any(np.isnan(grad.numpy())))
@@ -328,11 +337,12 @@ class TestCrossRIELayerGradient(unittest.TestCase):
         return model
 
     def _make_batch(self, B, N, M, T):
-        Cxx = tf.random.normal((B, N, N))
-        Cyy = tf.random.normal((B, M, M))
-        Cxy = tf.random.normal((B, N, M))
-        T_s = tf.constant([float(T)] * B)
-        target = tf.random.normal((B, N, M))
+        tf.random.set_seed(42)
+        Cxx = tf.random.normal((B, N, N), dtype=tf.float64)
+        Cyy = tf.random.normal((B, M, M), dtype=tf.float64)
+        Cxy = tf.random.normal((B, N, M), dtype=tf.float64)
+        T_s = tf.constant([float(T)] * B, dtype=tf.float64)
+        target = tf.random.normal((B, N, M), dtype=tf.float64)
         return [Cxx, Cyy, Cxy, T_s], target
 
     def test_train_step_additive(self):

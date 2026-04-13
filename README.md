@@ -17,6 +17,8 @@
 
 - **Robust End-to-End Forecasting**: Unlike purely analytical cleaners that rely on strict stationarity and bounded spectra, this framework is trained end-to-end to minimize out-of-sample (OOS) reconstruction error. The design is dimension-agnostic, allowing a model trained on one range of assets to be deployed across different universe sizes and relative dimensions without retraining.
 
+- **Numerically Stable SVD**: The internal SVD routine (`svd_via_eigh_full`) automatically upcasts to `float64` during eigendecomposition and projects back to the original dtype on output. This ensures consistent numerical precision across CPU and GPU backends without requiring the user to change the global dtype policy.
+
 ## Installation
 
 ### Using pip (from source)

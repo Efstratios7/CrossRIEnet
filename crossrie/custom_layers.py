@@ -1,6 +1,5 @@
 import tensorflow as tf
 from keras import layers
-from keras import backend as K
 from typing import Optional, List
 
 # ============================================================================
@@ -23,19 +22,26 @@ def _symmetrize(M: tf.Tensor) -> tf.Tensor:
 @tf.function(reduce_retracing=True)
 def svd_via_eigh_full(C, eps=None, jitter_eigh=0.0):
    """
-   Batched SVD via eigh(CC^T) con V_full costruita in modo coerente con U_k e s_k.
+   Batched SVD via eigh(CC^T) with V_full constructed coherently with U_k and s_k.
 
-
+   All internal arithmetic is performed in float64 for numerical stability
+   across diverse hardware (CPU / GPU). Outputs are cast back to the
+   original dtype of C before returning.
 
    C: [B, n, m]
-   Ritorna:
-     s_k    [B, r]        (r = min(n,m), singolari in ordine decrescente)
-     U_k    [B, n, r]
-     V_full [B, m, m]     (prime r colonne = right singular vectors coerenti)
+   Returns:
+     s_k    [B, r]        (r = min(n,m), singular values in descending order)
+     U_full [B, n, n]
+     V_full [B, m, m]     (first r columns = right singular vectors)
    """
    C = tf.convert_to_tensor(C)
+   orig_dtype = C.dtype
+   C = tf.cast(C, tf.float64)
+
    if eps is None:
-       eps = tf.cast(K.epsilon(), C.dtype)
+       eps = tf.constant(1e-14, dtype=tf.float64)
+   else:
+       eps = tf.cast(eps, tf.float64)
 
    B = tf.shape(C)[0]
    n = tf.shape(C)[1]
@@ -43,22 +49,22 @@ def svd_via_eigh_full(C, eps=None, jitter_eigh=0.0):
    r = tf.minimum(n, m)
    m_minus_r = m - r
 
-   # 1) U_k e s_k da eigh(CC^T), simmetrizzato
+   # 1) U_k and s_k from eigh(CC^T), symmetrized
    A = tf.matmul(C, C, transpose_b=True)            # [B, n, n]
    A = _symmetrize(A)
 
    if jitter_eigh != 0.0:
-       I_n = tf.eye(n, batch_shape=[B], dtype=C.dtype)
-       A = A + tf.cast(jitter_eigh, C.dtype) * I_n  # piccolo jitter sulla diagonale
+       I_n = tf.eye(n, batch_shape=[B], dtype=tf.float64)
+       A = A + tf.cast(jitter_eigh, tf.float64) * I_n
 
-   evals_u, U_full = tf.linalg.eigh(A)              # autovalori in ordine crescente
+   evals_u, U_full = tf.linalg.eigh(A)              # eigenvalues in ascending order
 
-   # Ordina in ordine decrescente
+   # Sort in descending order
    idx_u = tf.argsort(evals_u, direction="DESCENDING")
    evals_u = tf.gather(evals_u, idx_u, batch_dims=1, axis=1)    # [B, n]
    U_full = tf.gather(U_full, idx_u, batch_dims=1, axis=2)      # [B, n, n]
 
-   # Singolari = sqrt(max(evals, 0))
+   # Singular values = sqrt(max(evals, 0))
    zeros_evals = tf.zeros_like(evals_u)
    s_all = tf.sqrt(tf.maximum(evals_u, zeros_evals))            # [B, n]
 
@@ -66,26 +72,23 @@ def svd_via_eigh_full(C, eps=None, jitter_eigh=0.0):
    s_k = s_all[:, :r]                                           # [B, r]
    s_safe = tf.maximum(s_k, eps)
 
-   # 2) prime r colonne di V: V1 = C^T U_k / s_k
+   # 2) First r columns of V: V1 = C^T U_k / s_k
    V1 = tf.matmul(C, U_k, transpose_a=True)                     # [B, m, r]
    V1 = V1 / tf.expand_dims(s_safe, axis=1)                     # [B, m, r]
 
-   # 3) normalizza colonne di V1 e compensa in s_k
+   # 3) Normalize columns of V1 and compensate in s_k
    norms = tf.maximum(tf.linalg.norm(V1, axis=1), eps)          # [B, r]
    V1 = V1 / tf.expand_dims(norms, axis=1)                      # [B, m, r]
    s_k = s_k * norms                                            # [B, r]
 
-   I_m = tf.eye(m, batch_shape=[B], dtype=C.dtype)              # [B, m, m]
+   I_m = tf.eye(m, batch_shape=[B], dtype=tf.float64)           # [B, m, m]
    W0 = I_m[:, :, r:]                                           # [B, m, m-r]
 
-   # Proietta W0 sul complemento di span(V1):
-   # V1^T W0: [B, r, m-r]
+   # Project W0 onto the complement of span(V1):
    V1tW0 = tf.matmul(V1, W0, transpose_a=True)
-   # W1 = W0 - V1 (V1^T W0): [B, m, m-r]
    W1 = W0 - tf.matmul(V1, V1tW0)
 
-   # QR di W1: le colonne di Q sono ortonormali e (idealmente) nel complemento di span(V1)
-   # Funziona anche quando m_minus_r == 0 (dimensione nulla).
+   # QR of W1: columns of Q are orthonormal in the complement of span(V1).
    # stop_gradient: QR grad does not support dynamic shapes in graph mode;
    # V2 only provides complement-space features, not a critical gradient path.
    V2, _ = tf.linalg.qr(tf.stop_gradient(W1), full_matrices=False)  # [B, m, m-r]
@@ -93,6 +96,11 @@ def svd_via_eigh_full(C, eps=None, jitter_eigh=0.0):
 
    # V_full = [V1 | V2]
    V_full = tf.concat([V1, V2], axis=2)                         # [B, m, m]
+
+   # Cast back to original dtype
+   s_k = tf.cast(s_k, orig_dtype)
+   U_full = tf.cast(U_full, orig_dtype)
+   V_full = tf.cast(V_full, orig_dtype)
 
    return s_k, U_full, V_full
 
