@@ -20,89 +20,80 @@ def _symmetrize(M: tf.Tensor) -> tf.Tensor:
     return 0.5 * (M + tf.linalg.matrix_transpose(M))
 
 @tf.function(reduce_retracing=True)
-def svd_via_eigh_full(C, eps=None, jitter_eigh=0.0):
-   """
-   Batched SVD via eigh(CC^T) with V_full constructed coherently with U_k and s_k.
+def svd_via_eigh_full(C):
+    """
+    Differentiable full SVD via eigendecomposition.
+    Supports arbitrary batch dimensions (..., m, n).
+    """
+    # 1. Grab the last two dimensions dynamically
+    m = tf.shape(C)[-2]
+    n = tf.shape(C)[-1]
 
-   All internal arithmetic is performed in float64 for numerical stability
-   across diverse hardware (CPU / GPU). Outputs are cast back to the
-   original dtype of C before returning.
+    if m <= n:
+        # CCT shape: (..., m, m)
+        CCT = tf.matmul(C, C, transpose_b=True)
+        CCT = _symmetrize(CCT)   
+        eigvals, U = tf.linalg.eigh(CCT)           
 
-   C: [B, n, m]
-   Returns:
-     s_k    [B, r]        (r = min(n,m), singular values in descending order)
-     U_full [B, n, n]
-     V_full [B, m, m]     (first r columns = right singular vectors)
-   """
-   C = tf.convert_to_tensor(C)
-   orig_dtype = C.dtype
-   C = tf.cast(C, tf.float64)
+        # 2. tf.linalg.eigh returns ascending. Reverse the last axis for descending.
+        eigvals = tf.reverse(eigvals, axis=[-1])
+        U = tf.reverse(U, axis=[-1])
 
-   if eps is None:
-       eps = tf.constant(1e-14, dtype=tf.float64)
-   else:
-       eps = tf.cast(eps, tf.float64)
+        eigvals = tf.maximum(eigvals, 0.0)
+        s_full = tf.sqrt(eigvals)                  
+        s = s_full                                 
 
-   B = tf.shape(C)[0]
-   n = tf.shape(C)[1]
-   m = tf.shape(C)[2]
-   r = tf.minimum(n, m)
-   m_minus_r = m - r
+        safe_s = tf.where(s_full > 1e-15, s_full, tf.ones_like(s_full))
+        V_unscaled = tf.matmul(C, U, transpose_a=True)   
+        
+        # 3. Broadcast safe_s from (..., m) to (..., 1, m) for division
+        safe_s_expanded = tf.expand_dims(safe_s, axis=-2)
+        V_scaled = V_unscaled / safe_s_expanded          
 
-   # 1) U_k and s_k from eigh(CC^T), symmetrized
-   A = tf.matmul(C, C, transpose_b=True)            # [B, n, n]
-   A = _symmetrize(A)
+        # Expand s_full the same way for the boolean mask
+        mask = tf.expand_dims(s_full > 1e-15, axis=-2)
+        V_k = tf.where(mask, V_scaled, tf.zeros_like(V_scaled))
 
-   if jitter_eigh != 0.0:
-       I_n = tf.eye(n, batch_shape=[B], dtype=tf.float64)
-       A = A + tf.cast(jitter_eigh, tf.float64) * I_n
+        # Null space extraction
+        CTC = tf.matmul(C, C, transpose_a=True)    
+        _, V_full = tf.linalg.eigh(CTC)            
+        V_full = tf.reverse(V_full, axis=[-1])
 
-   evals_u, U_full = tf.linalg.eigh(A)              # eigenvalues in ascending order
+        # 4. Use ellipsis to slice only the last dimension safely across batches
+        V_null = V_full[..., :, m:]
+        V = tf.concat([V_k, V_null], axis=-1)        
 
-   # Sort in descending order
-   idx_u = tf.argsort(evals_u, direction="DESCENDING")
-   evals_u = tf.gather(evals_u, idx_u, batch_dims=1, axis=1)    # [B, n]
-   U_full = tf.gather(U_full, idx_u, batch_dims=1, axis=2)      # [B, n, n]
+    else:  # m > n
+        # CTC shape: (..., n, n)
+        CTC = tf.matmul(C, C, transpose_a=True) 
+        CTC = _symmetrize(CTC)  
+        eigvals, V = tf.linalg.eigh(CTC)           
 
-   # Singular values = sqrt(max(evals, 0))
-   zeros_evals = tf.zeros_like(evals_u)
-   s_all = tf.sqrt(tf.maximum(evals_u, zeros_evals))            # [B, n]
+        eigvals = tf.reverse(eigvals, axis=[-1])
+        V = tf.reverse(V, axis=[-1])
 
-   U_k = U_full[:, :, :r]                                       # [B, n, r]
-   s_k = s_all[:, :r]                                           # [B, r]
-   s_safe = tf.maximum(s_k, eps)
+        eigvals = tf.maximum(eigvals, 0.0)
+        s_full = tf.sqrt(eigvals)                  
+        s = s_full
 
-   # 2) First r columns of V: V1 = C^T U_k / s_k
-   V1 = tf.matmul(C, U_k, transpose_a=True)                     # [B, m, r]
-   V1 = V1 / tf.expand_dims(s_safe, axis=1)                     # [B, m, r]
+        safe_s = tf.where(s_full > 1e-15, s_full, tf.ones_like(s_full))
+        U_unscaled = tf.matmul(C, V)                
+        
+        safe_s_expanded = tf.expand_dims(safe_s, axis=-2)
+        U_scaled = U_unscaled / safe_s_expanded     
 
-   # 3) Normalize columns of V1 and compensate in s_k
-   norms = tf.maximum(tf.linalg.norm(V1, axis=1), eps)          # [B, r]
-   V1 = V1 / tf.expand_dims(norms, axis=1)                      # [B, m, r]
-   s_k = s_k * norms                                            # [B, r]
+        mask = tf.expand_dims(s_full > 1e-15, axis=-2)
+        U_k = tf.where(mask, U_scaled, tf.zeros_like(U_scaled))
 
-   I_m = tf.eye(m, batch_shape=[B], dtype=tf.float64)           # [B, m, m]
-   W0 = I_m[:, :, r:]                                           # [B, m, m-r]
+        # Null space extraction
+        CCT = tf.matmul(C, C, transpose_b=True)    
+        _, U_full = tf.linalg.eigh(CCT)
+        U_full = tf.reverse(U_full, axis=[-1])       
 
-   # Project W0 onto the complement of span(V1):
-   V1tW0 = tf.matmul(V1, W0, transpose_a=True)
-   W1 = W0 - tf.matmul(V1, V1tW0)
+        U_null = U_full[..., :, n:]
+        U = tf.concat([U_k, U_null], axis=-1)
 
-   # QR of W1: columns of Q are orthonormal in the complement of span(V1).
-   # stop_gradient: QR grad does not support dynamic shapes in graph mode;
-   # V2 only provides complement-space features, not a critical gradient path.
-   V2, _ = tf.linalg.qr(tf.stop_gradient(W1), full_matrices=False)  # [B, m, m-r]
-   V2 = tf.stop_gradient(V2)
-
-   # V_full = [V1 | V2]
-   V_full = tf.concat([V1, V2], axis=2)                         # [B, m, m]
-
-   # Cast back to original dtype
-   s_k = tf.cast(s_k, orig_dtype)
-   U_full = tf.cast(U_full, orig_dtype)
-   V_full = tf.cast(V_full, orig_dtype)
-
-   return s_k, U_full, V_full
+    return s, U, V
 
 @tf.function(reduce_retracing=True)
 def compute_projected_variance_diagonal(C: tf.Tensor, V: tf.Tensor) -> tf.Tensor:
@@ -245,7 +236,7 @@ class SpectralSVDLayer(tf.keras.layers.Layer):
             - U_full: Left singular vectors [Batch, N, N].
             - V_full: Right singular vectors [Batch, M, M].
         """
-        return svd_via_eigh_full(C, eps=self.eps)
+        return svd_via_eigh_full(C)
     
     def get_config(self):
         config = super().get_config()
